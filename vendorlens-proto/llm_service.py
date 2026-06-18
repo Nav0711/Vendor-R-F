@@ -50,8 +50,13 @@ For EACH adverse finding, output a JSON object with:
 - severity: (critical | high | medium | low)
 - title: short summary
 - description: detailed explanation
-- source_api: (opensanctions | gdelt | opencorporates | whois | ssl)
+- source_api: (opensanctions | gdelt | opencorporates | whois | ssl | sandbox_tsp)
 - confidence_score: 0.0 to 1.0
+
+## Specific Rules for Sandbox TSP (Indian Data):
+- If Sandbox TSP reports GSTIN status as 'Cancelled' or 'Suspended' or valid=false, flag as HIGH risk (regulatory_issue).
+- If Sandbox TSP reports PAN is Inactive or name mismatch, flag as MEDIUM or HIGH risk (regulatory_issue).
+- If Sandbox TSP reports MSMED is invalid, flag as MEDIUM risk.
 
 ## Output:
 Return ONLY a valid JSON array. No preamble. Example:

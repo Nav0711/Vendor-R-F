@@ -22,6 +22,12 @@ class VendorInput(Base):
     social_handles = Column(JSON)  # dict
     corporate_email_domain = Column(String(255))
     
+    # Indian context specific fields
+    pan_number = Column(String(50))
+    city = Column(String(100))
+    mobile_number = Column(String(50))
+    msmed_certificate_number = Column(String(100))
+    
     source_method = Column(String(50), default="excel")
     source_filename = Column(String(255))
     

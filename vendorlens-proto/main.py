@@ -102,6 +102,10 @@ async def intake_vendor_excel(file: UploadFile = File(...), db: Session = Depend
             founder_ceo_name=_clean_str(row.get("founder_ceo_name")),
             social_handles=social_handles,
             corporate_email_domain=_clean_str(row.get("corporate_email_domain")),
+            pan_number=_clean_str(row.get("pan_number")),
+            city=_clean_str(row.get("city")),
+            mobile_number=_clean_str(row.get("mobile_number")),
+            msmed_certificate_number=_clean_str(row.get("msmed_certificate_number")),
             source_method="excel",
             source_filename=file.filename
         )
@@ -138,7 +142,10 @@ async def scan_vendor(input_id: str, db: Session = Depends(get_db)):
             jurisdiction_country=vendor.jurisdiction_country,
             director_names=vendor.director_names or [],
             director_din=vendor.director_din or [],
-            founder_ceo_name=vendor.founder_ceo_name
+            founder_ceo_name=vendor.founder_ceo_name,
+            tax_identifier=vendor.tax_identifier,
+            pan_number=vendor.pan_number,
+            msmed_certificate_number=vendor.msmed_certificate_number
         )
         
         # 3. Extract findings via LLM

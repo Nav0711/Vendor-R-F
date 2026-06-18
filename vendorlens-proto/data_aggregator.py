@@ -1,4 +1,4 @@
-from apis import opencorp, opensanctions, gdelt, whois_api, ssl_api
+from apis import opencorp, opensanctions, gdelt, whois_api, ssl_api, sandbox_api
 import asyncio
 import logging
 from typing import Optional
@@ -12,7 +12,10 @@ async def aggregate_vendor_data(
     jurisdiction_country: Optional[str],
     director_names: list[str],
     director_din: list[str],
-    founder_ceo_name: Optional[str]
+    founder_ceo_name: Optional[str],
+    tax_identifier: Optional[str] = None,
+    pan_number: Optional[str] = None,
+    msmed_certificate_number: Optional[str] = None
 ) -> dict:
     """
     Call all 5 APIs sequentially and aggregate results.
@@ -24,7 +27,8 @@ async def aggregate_vendor_data(
         "opensanctions": {},
         "gdelt": {},
         "whois": {},
-        "ssl": {}
+        "ssl": {},
+        "sandbox_tsp": {}
     }
     
     try:
@@ -87,5 +91,21 @@ async def aggregate_vendor_data(
     except Exception as e:
         logger.error(f"SSL Aggregation failed: {e}")
         aggregated["ssl"] = {"error": str(e)}
+        
+    try:
+        # 6. Sandbox TSP API (India Specific)
+        if jurisdiction_country and jurisdiction_country.upper() == "IN":
+            logger.info(f"Checking Sandbox TSP for Indian vendor {legal_name}...")
+            tsp_results = {}
+            if tax_identifier:  # Assuming tax_identifier maps to GSTIN
+                tsp_results["gstin"] = await sandbox_api.verify_gstin(tax_identifier)
+            if pan_number:
+                tsp_results["pan"] = await sandbox_api.verify_pan(pan_number)
+            if msmed_certificate_number:
+                tsp_results["msmed"] = await sandbox_api.verify_msmed(msmed_certificate_number)
+            aggregated["sandbox_tsp"] = tsp_results
+    except Exception as e:
+        logger.error(f"Sandbox TSP Aggregation failed: {e}")
+        aggregated["sandbox_tsp"] = {"error": str(e)}
         
     return aggregated

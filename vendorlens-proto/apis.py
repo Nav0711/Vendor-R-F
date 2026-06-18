@@ -163,9 +163,65 @@ class SSLCheckAPI:
                 "has_ssl": False
             }
 
+class SandboxAPI:
+    """Mock implementation for Sandbox.co.in TSP."""
+    def __init__(self):
+        self.api_key = os.getenv("SANDBOX_API_KEY", "dummy_key")
+        self.base_url = "https://api.sandbox.co.in/v1"
+
+    async def verify_gstin(self, gstin: str) -> dict:
+        """Dummy response for GSTIN verification."""
+        if not gstin:
+            return {"error": "No GSTIN provided"}
+        
+        # Mock logic based on input string
+        if "INVALID" in gstin.upper():
+            return {"valid": False, "status": "Cancelled", "taxpayer_name": None}
+            
+        return {
+            "valid": True,
+            "status": "Active",
+            "taxpayer_name": "Mocked Taxpayer Pvt Ltd",
+            "registration_date": "2020-01-01",
+            "taxpayer_type": "Regular",
+            "gstin": gstin
+        }
+        
+    async def verify_pan(self, pan: str) -> dict:
+        """Dummy response for PAN verification."""
+        if not pan:
+            return {"error": "No PAN provided"}
+            
+        if "INVALID" in pan.upper():
+            return {"valid": False, "name": None, "status": "Inactive"}
+            
+        return {
+            "valid": True,
+            "status": "Active",
+            "name": "Mocked Taxpayer Pvt Ltd",
+            "pan": pan
+        }
+        
+    async def verify_msmed(self, msmed_num: str) -> dict:
+        """Dummy response for MSMED/Udyam verification."""
+        if not msmed_num:
+            return {"error": "No MSMED number provided"}
+            
+        if "INVALID" in msmed_num.upper():
+            return {"valid": False, "enterprise_type": None}
+            
+        return {
+            "valid": True,
+            "enterprise_type": "Micro",
+            "name": "Mocked Taxpayer Pvt Ltd",
+            "msmed_number": msmed_num,
+            "status": "Active"
+        }
+
 # Initialize API clients
 opencorp = OpenCorporatesAPI()
 opensanctions = OpenSanctionsAPI()
 gdelt = GDELTNewsAPI()
 whois_api = WHOISAPI()
 ssl_api = SSLCheckAPI()
+sandbox_api = SandboxAPI()
