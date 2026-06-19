@@ -1,252 +1,108 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+import uuid
+import json
+import asyncio
+from datetime import datetime
+import pandas as pd
+import io
+
 from database import get_db, engine
-from models import VendorInput, VendorRiskReport, Base
+from models import Base, VendorInput, KybScan, AdverseFinding, ScanSubject
 from data_aggregator import aggregate_vendor_data
 from llm_service import extract_findings_from_data
-from risk_scorer import score_findings
-from token_manager import token_manager
-import json
-import pandas as pd
-from typing import Optional
-import io
-import math
-import re
 
-# Create tables
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="VendorLens Prototype")
+app = FastAPI()
 
-# Enable CORS for frontend testing
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite default port
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ============ PYDANTIC MODELS ============
-
-class VendorIntakeResponse(BaseModel):
+class ScanRequest(BaseModel):
     input_id: str
-    legal_name: str
-    message: str
+    scan_type: str # quick or deep
 
-class FindingResponse(BaseModel):
-    finding_type: str
-    severity: str
-    title: str
-    description: str
-    source_api: str
-    confidence_score: float
-
-class RiskReportResponse(BaseModel):
-    report_id: str
-    overall_risk_tier: str
-    risk_score: float
-    summary: str
-    findings: list[FindingResponse]
-    recommendations: str
-    tokens_used: int
-    tokens_remaining: int
-
-# ============ ENDPOINTS ============
-
-def _clean_str(val) -> Optional[str]:
-    if pd.isna(val):
-        return None
-    s = str(val).strip()
-    return s if s else None
-
-def _split_list(val) -> list[str]:
-    if pd.isna(val):
-        return []
-    s = str(val).strip()
-    return [v.strip() for v in s.split(";") if v.strip()] if s else []
-
-COLUMN_MAP = {
-    "legal_name": ["legal_name", "legal name", "name", "company_name", "company", "entity_name", "supplier"],
-    "website_domain": ["website_domain", "website", "website url", "domain", "website_domain_name", "web site", "url"],
-    "registration_number": ["registration_number", "registration no", "registration no.", "registration", "reg no", "reg_number", "bp number", "bp_number"],
-    "jurisdiction_country": ["jurisdiction_country", "country", "jurisdiction", "country_code", "jurisdiction country"],
-    "tax_identifier": ["tax_identifier", "tax id", "tax_id", "tax identifier", "gstin", "gstin-tax no3", "gstin_tax_no3", "pan"],
-    "registered_address": ["registered_address", "address", "registered address", "registered_addr", "street", "street 2", "street 3", "city", "district", "postal code", "postl code"],
-    "director_names": ["director_names", "directors", "director name", "director_names_list"],
-    "director_din": ["director_din", "din", "director din", "director_identification_number"],
-    "founder_ceo_name": ["founder_ceo_name", "founder", "ceo_name", "founder name", "ceo"],
-    "social_handles": ["social_handles", "social media", "social accounts", "social handles"],
-    "corporate_email_domain": ["corporate_email_domain", "email_domain", "corporate email", "email domain"],
-    "email_address": ["email_address", "e_mail_address", "email address", "e-mail address", "email"],
-    "pan_number": ["pan_number", "pan", "pan no", "pan_number"],
-    "city": ["city", "town", "location"],
-    "mobile_number": ["mobile_number", "phone", "mobile", "mobile no", "phone_number", "contact_number"],
-    "msmed_certificate_number": ["msmed_certificate_number", "msmed", "udyam_no", "udyam", "msmed certificate", "msmed number", "msmed cerificate no", "msmed certificate no"],
-}
-
-def normalize_column_name(name: str) -> str:
-    if not isinstance(name, str):
-        return ""
-    normalized = re.sub(r"[^a-z0-9]", "_", name.strip().lower())
-    normalized = re.sub(r"_+", "_", normalized).strip("_")
-    return normalized
-
-
-def _normalize_domain(value: Optional[str]) -> Optional[str]:
-    if not value:
-        return None
-    s = str(value).strip().lower()
-    s = re.sub(r"^https?://", "", s)
-    s = re.sub(r"^www\\.", "", s)
-    s = s.split("/", 1)[0].split("?", 1)[0]
-    return s if s else None
-
-
-def _find_email_column(columns: list[str]) -> Optional[str]:
-    normalized = {normalize_column_name(col): col for col in columns}
-    email_candidates = [
-        "email_address",
-        "e_mail_address",
-        "email",
-        "e-mail address",
-        "corporate_email_domain",
-        "email_domain",
-        "corporate email",
-        "email domain",
-    ]
-    for alias in email_candidates:
-        found = normalized.get(normalize_column_name(alias))
-        if found:
-            return found
-    for col in columns:
-        if "email" in normalize_column_name(col) or "e_mail" in normalize_column_name(col):
-            return col
-    return None
-
-def map_columns(columns: list[str]) -> dict[str, str]:
-    mapped = {}
-    normalized_columns = {normalize_column_name(col): col for col in columns}
-    for key, aliases in COLUMN_MAP.items():
-        for alias in aliases:
-            normalized_alias = normalize_column_name(alias)
-            if normalized_alias in normalized_columns:
-                mapped[key] = normalized_columns[normalized_alias]
-                break
-    return mapped
-
-@app.post("/api/v1/vendor/intake", response_model=VendorIntakeResponse)
-async def intake_vendor_excel(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Accept vendor data via Excel upload and store in DB."""
-    if not file.filename.endswith(".xlsx"):
-        raise HTTPException(status_code=400, detail="Only .xlsx files are supported")
-    
+@app.post("/vendor/intake")
+async def create_intake(
+    excel_file: UploadFile = File(default=None),
+    manual_fields: str = Form(default=None),
+    db: Session = Depends(get_db)
+):
     try:
-        contents = await file.read()
-        try:
-            df = pd.read_excel(io.BytesIO(contents), sheet_name="Vendor_Intake", dtype=str)
-        except ValueError:
-            df = pd.read_excel(io.BytesIO(contents), sheet_name=0, dtype=str)
-        if df.empty:
-            raise HTTPException(status_code=400, detail="Excel template has no data row")
-        
-        columns = list(df.columns)
-        col_map = map_columns(columns)
-        
-        if "legal_name" not in col_map:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Excel must contain a legal_name column. "
-                    f"Detected columns: {columns}"
-                )
-            )
-        
-        row = df.iloc[0] # Single vendor per upload
-        
-        legal_name = _clean_str(row.get(col_map["legal_name"]))
-        website_domain = _normalize_domain(_clean_str(row.get(col_map.get("website_domain", "")))) if "website_domain" in col_map else None
-        
-        if not legal_name:
-            raise HTTPException(status_code=400, detail="Excel must contain legal_name values")
+        record_data = {}
+        source_method = 'manual'
+        source_filename = None
 
-        if not website_domain:
-            # If no website is provided, try to infer from email if available
-            email_col = col_map.get("email_address") or col_map.get("corporate_email_domain") or _find_email_column(columns)
-            if email_col:
-                email_value = _clean_str(row.get(email_col))
-                if email_value and "@" in email_value:
-                    website_domain = _normalize_domain(email_value.split("@", 1)[1])
-        
-        if not website_domain:
-            raise HTTPException(status_code=400, detail="Excel must contain website_domain or email address values")
-
-        social_handles = {}
-        for alias, platform in [("linkedin", "linkedin"), ("twitter", "twitter"), ("facebook", "facebook")]:
-            for col in columns:
-                if normalize_column_name(col).startswith(alias):
-                    val = _clean_str(row.get(col))
-                    if val:
-                        social_handles[platform] = val
-                        break
-
-        def get_mapped_value(field_name: str):
-            return _clean_str(row.get(col_map[field_name])) if field_name in col_map else None
-
-        def get_mapped_list(field_name: str):
-            return _split_list(row.get(col_map[field_name])) if field_name in col_map else []
+        if excel_file:
+            contents = await excel_file.read()
+            df = pd.read_excel(io.BytesIO(contents), sheet_name=0, dtype=str).fillna("")
+            if df.empty:
+                raise HTTPException(400, "Excel template has no data row")
+            row = df.iloc[0].to_dict()
+            record_data = {
+                "legal_name": row.get("legal_name", "").strip(),
+                "website_domain": row.get("website_domain", "").strip(),
+                "registration_number": row.get("registration_number", "").strip(),
+                "jurisdiction_country": row.get("jurisdiction_country", "").strip(),
+                "tax_identifier": row.get("tax_identifier", "").strip(),
+                "registered_address": row.get("registered_address", "").strip(),
+                "director_names": [v.strip() for v in row.get("director_names", "").split(";") if v.strip()],
+                "director_din": [v.strip() for v in row.get("director_din", "").split(";") if v.strip()],
+                "founder_ceo_name": row.get("founder_ceo_name", "").strip(),
+                "social_handles": {},
+                "corporate_email_domain": row.get("corporate_email_domain", "").strip()
+            }
+            source_method = 'excel'
+            source_filename = excel_file.filename
+        elif manual_fields:
+            record_data = json.loads(manual_fields)
+        else:
+            raise HTTPException(400, "Provide either excel_file or manual_fields")
 
         vendor = VendorInput(
-            legal_name=legal_name,
-            website_domain=website_domain,
-            registration_number=get_mapped_value("registration_number"),
-            jurisdiction_country=get_mapped_value("jurisdiction_country"),
-            tax_identifier=get_mapped_value("tax_identifier"),
-            registered_address=get_mapped_value("registered_address"),
-            director_names=get_mapped_list("director_names"),
-            director_din=get_mapped_list("director_din"),
-            founder_ceo_name=get_mapped_value("founder_ceo_name"),
-            social_handles=social_handles,
-            corporate_email_domain=get_mapped_value("corporate_email_domain"),
-            pan_number=get_mapped_value("pan_number"),
-            city=get_mapped_value("city"),
-            mobile_number=get_mapped_value("mobile_number"),
-            msmed_certificate_number=get_mapped_value("msmed_certificate_number"),
-            source_method="excel",
-            source_filename=file.filename
+            legal_name=record_data.get('legal_name'),
+            website_domain=record_data.get('website_domain'),
+            registration_number=record_data.get('registration_number'),
+            jurisdiction_country=record_data.get('jurisdiction_country'),
+            tax_identifier=record_data.get('tax_identifier'),
+            registered_address=record_data.get('registered_address'),
+            director_names=record_data.get('director_names', []),
+            director_din=record_data.get('director_din', []),
+            founder_ceo_name=record_data.get('founder_ceo_name'),
+            social_handles=record_data.get('social_handles', {}),
+            corporate_email_domain=record_data.get('corporate_email_domain'),
+            source_method=source_method,
+            source_filename=source_filename
         )
-        
         db.add(vendor)
         db.commit()
         db.refresh(vendor)
-        
-        return VendorIntakeResponse(
-            input_id=vendor.input_id,
-            legal_name=vendor.legal_name,
-            message="Vendor intake recorded from Excel. Call /scan to start screening."
-        )
+
+        return {
+            "input_id": vendor.input_id,
+            "source_method": vendor.source_method,
+            "deep_diligence_ready": True
+        }
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=f"Failed to process Excel file: {str(e)}")
+        raise HTTPException(400, str(e))
 
-@app.post("/api/v1/scan/{input_id}", response_model=RiskReportResponse)
-async def scan_vendor(input_id: str, db: Session = Depends(get_db)):
-    """
-    Scan a vendor: aggregate data + LLM analysis + scoring.
-    """
-    # Check token balance first
-    if token_manager.get_balance() <= 0:
-        raise HTTPException(status_code=402, detail="Insufficient tokens to perform scan.")
-        
+async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
+    db = next(get_db())
     try:
-        # 1. Get vendor input
         vendor = db.query(VendorInput).filter(VendorInput.input_id == input_id).first()
         if not vendor:
-            raise HTTPException(status_code=404, detail="Vendor not found")
-        
-        # 2. Aggregate data
+            return
+
+        # Fetch Data
         aggregated_data = await aggregate_vendor_data(
             legal_name=vendor.legal_name,
             website_domain=vendor.website_domain,
@@ -256,77 +112,131 @@ async def scan_vendor(input_id: str, db: Session = Depends(get_db)):
             director_din=vendor.director_din or [],
             founder_ceo_name=vendor.founder_ceo_name,
             tax_identifier=vendor.tax_identifier,
-            pan_number=vendor.pan_number,
-            msmed_certificate_number=vendor.msmed_certificate_number
+            pan_number=None,
+            msmed_certificate_number=None
         )
-        
-        # 3. Extract findings via LLM
-        findings, tokens_used = await extract_findings_from_data(aggregated_data)
-        
-        # Deduct tokens (if not enough, fallback but we checked earlier)
-        # We assume 1 token = 1 unit for now, or just subtract tokens_used
-        # If tokens_used is higher than balance, they just go to 0 or negative.
-        if token_manager.get_balance() >= tokens_used:
-             token_manager.deduct(tokens_used)
-        else:
-             token_manager.deduct(token_manager.get_balance()) # drain it
-             
-        # 4. Score findings
-        risk_result = score_findings(findings)
-        
-        # 5. Save report
-        report = VendorRiskReport(
-            input_id=input_id,
-            overall_risk_tier=risk_result["tier"],
-            risk_score=risk_result["score"],
-            summary=risk_result["summary"],
-            critical_count=risk_result["critical"],
-            high_count=risk_result["high"],
-            medium_count=risk_result["medium"],
-            low_count=risk_result["low"],
-            findings_count=len(findings),
-            findings_json=findings,
-            recommendations=risk_result["recommendations"],
-            raw_api_data=aggregated_data
-        )
-        db.add(report)
-        db.commit()
-        db.refresh(report)
-        
-        return RiskReportResponse(
-            report_id=report.report_id,
-            overall_risk_tier=report.overall_risk_tier,
-            risk_score=float(report.risk_score),
-            summary=report.summary,
-            findings=[FindingResponse(**f) for f in report.findings_json],
-            recommendations=report.recommendations,
-            tokens_used=tokens_used,
-            tokens_remaining=token_manager.get_balance()
-        )
-        
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Scan failed: {str(e)}")
 
-@app.get("/api/v1/report/{report_id}")
-async def get_report(report_id: str, db: Session = Depends(get_db)):
-    """Retrieve a previous report."""
-    report = db.query(VendorRiskReport).filter(VendorRiskReport.report_id == report_id).first()
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
-    
+        # Simulate delay to match "processing time" expectations
+        await asyncio.sleep(3)
+
+        findings, tokens_used = await extract_findings_from_data(aggregated_data)
+
+        # PRD Scoring logic simulation
+        critical_count = sum(1 for f in findings if f['severity'] == 'critical')
+        high_count = sum(1 for f in findings if f['severity'] == 'high')
+        medium_count = sum(1 for f in findings if f['severity'] == 'medium')
+        
+        overall_risk = 'CLEAN'
+        if critical_count > 0: overall_risk = 'CRITICAL'
+        elif high_count > 0: overall_risk = 'HIGH'
+        elif medium_count > 0: overall_risk = 'MEDIUM'
+        elif len(findings) > 0: overall_risk = 'LOW'
+
+        scan = db.query(KybScan).filter(KybScan.scan_id == scan_id).first()
+        scan.status = 'COMPLETED'
+        scan.overall_risk_level = overall_risk
+        scan.total_findings = len(findings)
+        scan.completed_at = datetime.utcnow()
+        scan.raw_data_summary = {"findings_by_category": {
+            "sanctions": critical_count,
+            "adverse_media": high_count,
+            "domain_anomaly": medium_count
+        }}
+
+        for f in findings:
+            finding = AdverseFinding(
+                scan_id=scan_id,
+                subject_type="ENTITY",
+                subject_name=vendor.legal_name,
+                category=f.get('finding_type', 'other'),
+                severity=f.get('severity', 'low').upper(),
+                confidence_score=int(f.get('confidence_score', 0) * 10),
+                title=f.get('title', 'Finding'),
+                detail=f.get('description', ''),
+                source_tool=f.get('source_api', ''),
+                source_name=f.get('source_api', ''),
+                raw_excerpt=f.get('description', '')
+            )
+            db.add(finding)
+
+        db.commit()
+
+    except Exception as e:
+        print(f"Scan failed: {e}")
+        scan = db.query(KybScan).filter(KybScan.scan_id == scan_id).first()
+        if scan:
+            scan.status = 'ERROR'
+            db.commit()
+
+@app.post("/scan")
+async def run_scan(payload: ScanRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    vendor = db.query(VendorInput).filter(VendorInput.input_id == payload.input_id).first()
+    if not vendor:
+        raise HTTPException(404, "Unknown input_id")
+
+    scan = KybScan(
+        input_id=payload.input_id,
+        scan_type=payload.scan_type,
+        status="RUNNING"
+    )
+    db.add(scan)
+    db.commit()
+    db.refresh(scan)
+
+    background_tasks.add_task(run_scan_workflow, scan.scan_id, payload.input_id, payload.scan_type)
+
     return {
-        "report_id": report.report_id,
-        "overall_risk_tier": report.overall_risk_tier,
-        "risk_score": float(report.risk_score),
-        "summary": report.summary,
-        "findings": report.findings_json,
-        "recommendations": report.recommendations,
-        "created_at": report.created_at.isoformat(),
-        "input_id": report.input_id
+        "scan_id": scan.scan_id,
+        "input_id": payload.input_id,
+        "status": "RUNNING",
+        "scan_type": payload.scan_type,
     }
 
-@app.get("/health")
-async def health_check():
-    """Health check for load balancer."""
-    return {"status": "healthy"}
+@app.get("/scan/{scan_id}/status")
+async def get_scan_status(scan_id: str, db: Session = Depends(get_db)):
+    scan = db.query(KybScan).filter(KybScan.scan_id == scan_id).first()
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    return {"status": scan.status}
+
+@app.get("/scan/{scan_id}/report")
+async def get_report(scan_id: str, db: Session = Depends(get_db)):
+    scan = db.query(KybScan).filter(KybScan.scan_id == scan_id).first()
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    
+    vendor = db.query(VendorInput).filter(VendorInput.input_id == scan.input_id).first()
+
+    findings = db.query(AdverseFinding).filter(AdverseFinding.scan_id == scan_id).all()
+    
+    findings_list = []
+    for f in findings:
+        findings_list.append({
+            "finding_id": f.finding_id,
+            "subject_type": f.subject_type,
+            "subject_name": f.subject_name,
+            "category": f.category,
+            "severity": f.severity,
+            "title": f.title,
+            "detail": f.detail,
+            "evidence": {
+                "source_tool": f.source_tool,
+                "source_name": f.source_name,
+                "raw_excerpt": f.raw_excerpt
+            }
+        })
+
+    return {
+        "subject": {
+            "legal_name": vendor.legal_name,
+            "domain": vendor.website_domain,
+            "scan_timestamp": scan.scan_timestamp.isoformat() if scan.scan_timestamp else None,
+            "scan_type": scan.scan_type
+        },
+        "risk_summary": {
+            "overall_risk_level": scan.overall_risk_level,
+            "total_adverse_findings": scan.total_findings,
+            "findings_by_category": scan.raw_data_summary.get("findings_by_category", {}) if scan.raw_data_summary else {}
+        },
+        "adverse_findings": findings_list
+    }

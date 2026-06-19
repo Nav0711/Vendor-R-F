@@ -1,0 +1,95 @@
+# Implementation Plan — VendorLens Working Prototype (v2.0)
+
+This plan outlines the technical changes to implement the fully working VendorLens prototype as specified in the PRD, featuring:
+1. **Free API Key Acquisition Process**: Detailed instructions for obtaining all required keys.
+2. **Sandbox TSP Integration**: The transition from mock to live HTTPS API calls to Sandbox.co.in.
+3. **Excel Multi-Row Parsing & Dropdown Selector**: The UI and API changes to support uploading a multi-row Excel sheet, displaying a dropdown of vendors, and auto-filling the intake form.
+
+---
+
+## User Review Required
+
+We have documented the exact step-by-step process of acquiring the API keys. Some keys (like Google Custom Search and Sandbox.co.in) require registering a developer account. We recommend following these instructions to set up your `.env` variables.
+
+> [!IMPORTANT]
+> The term "Sandbox TCP setup" in the codebase and communications refers to the **Sandbox.co.in TSP (Taxpayer Service Provider) API integration** over HTTPS. We will implement the actual API client in [apis.py](file:///c:/Users/intern.digitaltransf/Desktop/Project_1/vendorlens-proto/apis.py) to replace the hardcoded mocks when `MOCK_API_CALLS=false` is set in `.env`.
+
+> [!TIP]
+> To support parsing unstructured procurement Excel spreadsheets (like [Vendor_Data_test.xlsx](file:///c:/Users/intern.digitaltransf/Desktop/Project_1/docs/Vendor_Data_test.xlsx)) alongside the canonical template, we will implement a flexible column-mapping logic that detects column aliases (e.g. `BP Number` or `Supplier` as vendor ID, and `Name` or `legal_name` as company name).
+
+---
+
+## Process of Acquiring Free API Keys
+
+The following API keys are needed to unlock full pipeline scans. All of these provide developer accounts that are free and easy to set up:
+
+| API Service | Purpose | Free Tier Limits | Acquisition Steps |
+| :--- | :--- | :--- | :--- |
+| **OpenCorporates** | Official company status & registration lookup | 500 requests/month | 1. Go to [OpenCorporates User Sign Up](https://opencorporates.com/users/sign_up).<br>2. Complete registration and verify email.<br>3. Navigate to account settings to find your **API Token** (`OPENCORPORATES_API_KEY`). |
+| **OpenSanctions** | Global sanctions & PEP watchlists fuzzy match | Free key for non-commercial & research | 1. Sign up on [OpenSanctions API Portal](https://www.opensanctions.org/docs/api/).<br>2. Generate an API Key and add it as `OPENSANCTIONS_API_KEY`. |
+| **NewsAPI** | Keyword search for adverse media and litigation | 100 requests/day | 1. Register at [NewsAPI Register Page](https://newsapi.org/register).<br>2. Retrieve your **API Key** from the dashboard. |
+| **Google Custom Search Engine (CSE)** | Site-scoped search for official court & regulatory documents | 100 requests/day | 1. Visit [Google Programmable Search](https://programmablesearchengine.google.com/) and create a search engine (add sites like `courtlistener.com`, `sec.gov`, `justice.gov`) to obtain your **Search Engine ID** (`cx`).<br>2. Go to the [Google Cloud Console](https://console.cloud.google.com/), enable the **Custom Search API**, and create an API Key under Credentials. |
+| **Sandbox.co.in (TSP)** | Indian GSTIN, PAN, and MSMED official registry verification | Free testing credits | 1. Go to the [Sandbox.co.in Developer Portal](https://sandbox.co.in/).<br>2. Register a developer account.<br>3. Go to **Settings → API Keys** in your Sandbox Console.<br>4. Generate and copy your `x-api-key` and `x-api-secret` (stored in `.env`). |
+
+---
+
+## Proposed Changes
+
+We will modify both the backend and frontend components to support the new features.
+
+### Backend Component
+
+We will create a new endpoint, modify the models to persist PAN and MSMED numbers, and write the live Sandbox TSP client.
+
+#### [MODIFY] [models.py](file:///c:/Users/intern.digitaltransf/Desktop/Project_1/vendorlens-proto/models.py)
+- Re-add the Indian-context fields to `VendorInput` database model to store:
+  - `pan_number = Column(String(50))`
+  - `msmed_certificate_number = Column(String(100))`
+  - `mobile_number = Column(String(50))`
+  - `city = Column(String(100))`
+- These fields ensure that selected Excel entries persist their tax identifiers correctly for scans.
+
+#### [MODIFY] [apis.py](file:///c:/Users/intern.digitaltransf/Desktop/Project_1/vendorlens-proto/apis.py)
+- Implement a functional `SandboxAPI` client that runs when `MOCK_API_CALLS=false`:
+  - On initialization or when token is missing/expired, perform a `POST` request to `https://api.sandbox.co.in/authenticate` with headers `x-api-key` and `x-api-secret` to get a 24-hour access token.
+  - Implement `verify_gstin(gstin)` using `POST https://api.sandbox.co.in/gst/compliance/public/gstin/search`.
+  - Implement `verify_pan(pan)` using `POST https://api.sandbox.co.in/kyc/pan` with the required consent request payload.
+  - Implement `verify_msmed(msmed)` by initiating a session or utilizing sandbox mock fallbacks where interactive consent is required.
+
+#### [MODIFY] [main.py](file:///c:/Users/intern.digitaltransf/Desktop/Project_1/vendorlens-proto/main.py)
+- Add a new POST endpoint `/vendor/parse-excel` that:
+  - Takes an uploaded Excel file.
+  - Parses all rows in the sheet using `pandas`.
+  - Employs a flexible column-mapping logic (supporting both the custom template and fields like `Supplier`, `BP Number`, `Name`, `GSTIN-TAX NO3`, `PAN`, `MSMED Cerificate No` found in standard files).
+  - Returns a JSON array of parsed vendors.
+- Update `/vendor/intake` to support receiving the full set of manual fields (including `pan_number` and `msmed_certificate_number`).
+- Update `run_scan_workflow` to pass `pan_number` and `msmed_certificate_number` from `VendorInput` to `aggregate_vendor_data`.
+
+---
+
+### Frontend Component
+
+We will update the intake UI to support Excel parsing, vendor selection, and automated form filling.
+
+#### [MODIFY] [IntakeForm.tsx](file:///c:/Users/intern.digitaltransf/Desktop/Project_1/vendorlens-frontend/src/components/IntakeForm.tsx)
+- Integrate a new file upload handler:
+  - When an Excel file is uploaded, send it to `http://localhost:8000/vendor/parse-excel`.
+  - Receive the list of parsed vendors.
+  - Render an interactive **dropdown menu** listing the names and ID/BP numbers of the parsed vendors: `Name (BP Number)`.
+  - Selecting a vendor from the dropdown automatically populates the form inputs (Legal Name, Domain, registration/tax numbers, address, PAN, MSME, etc.) in the manual form section.
+  - The user can review, edit, or fill any missing values.
+  - Submitting the form calls `POST http://localhost:8000/vendor/intake` with the selected/populated vendor details.
+
+---
+
+## Verification Plan
+
+### Automated Tests
+- Run `vendorlens-proto/scripts/test_sandbox_integration.py` to verify the end-to-end flow with the FastAPI server.
+- Test column mapping with [VendorLens_Intake_Template.xlsx](file:///c:/Users/intern.digitaltransf/Desktop/Project_1/VendorLens_Intake_Template.xlsx) and [Vendor_Data_test.xlsx](file:///c:/Users/intern.digitaltransf/Desktop/Project_1/docs/Vendor_Data_test.xlsx).
+
+### Manual Verification
+- Upload [Vendor_Data_test.xlsx](file:///c:/Users/intern.digitaltransf/Desktop/Project_1/docs/Vendor_Data_test.xlsx) on the frontend intake page.
+- Assert that the dropdown menu lists all vendors with their names and BP numbers.
+- Select a vendor and verify that all details (such as name, PAN, registered address) are populated automatically into the manual fields.
+- Set `MOCK_API_CALLS=false` and verify that the backend successfully authenticates and reaches the Sandbox.co.in servers.
