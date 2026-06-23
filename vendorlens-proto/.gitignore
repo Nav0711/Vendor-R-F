@@ -22,3 +22,5 @@ env/
 
 # OS/System files
 .DS_Store
+
+token_state.json

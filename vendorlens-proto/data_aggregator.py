@@ -1,6 +1,6 @@
 from apis import (
     opencorp, opensanctions, gdelt, whois_api, ssl_api, sandbox_api,
-    serper_api, news_api, google_places_api, microlink_api
+    serper_api, news_api, google_places_api, microlink_api, wikipedia_api
 )
 import asyncio
 import logging
@@ -22,11 +22,15 @@ async def _gather_sanctions(all_names):
             sanctions_results[name] = await opensanctions.search_entity(name)
     return sanctions_results
 
-async def _gather_gdelt(legal_name, founder_ceo_name):
+async def _gather_gdelt(legal_name, founder_ceo_name, director_names=None):
+    """Search GDELT for company, CEO/founder, and up to 2 directors."""
     news_results = {}
     news_results[legal_name] = await gdelt.search_news(legal_name)
     if founder_ceo_name:
         news_results[founder_ceo_name] = await gdelt.search_news(founder_ceo_name)
+    for director in (director_names or [])[:2]:
+        if director and director not in (founder_ceo_name, legal_name):
+            news_results[director] = await gdelt.search_news(director)
     return news_results
 
 async def _gather_sandbox(jurisdiction_country, tax_identifier, pan_number, msmed_certificate_number):
@@ -54,7 +58,10 @@ async def aggregate_vendor_data(
     founder_ceo_name: Optional[str],
     tax_identifier: Optional[str] = None,
     pan_number: Optional[str] = None,
-    msmed_certificate_number: Optional[str] = None
+    msmed_certificate_number: Optional[str] = None,
+    city: Optional[str] = None,
+    registered_address: Optional[str] = None,
+    social_handles: Optional[dict] = None
 ) -> dict:
     """
     Call all APIs asynchronously and aggregate results.
@@ -68,9 +75,28 @@ async def aggregate_vendor_data(
             legal_name, jurisdiction=jurisdiction_country.lower() if jurisdiction_country else "us"
         )),
         _safe_call("opensanctions", _gather_sanctions(all_names)),
-        _safe_call("gdelt", _gather_gdelt(legal_name, founder_ceo_name)),
-        _safe_call("serper", serper_api.search(f"{legal_name} official website fraud reviews")),
+        _safe_call("gdelt", _gather_gdelt(legal_name, founder_ceo_name, director_names)),
+        # Adverse search — fraud/reviews
+        _safe_call("serper", serper_api.search(f"{legal_name} fraud scam complaints reviews")),
         _safe_call("newsapi", news_api.search_news(f"{legal_name} AND (fraud OR scandal OR lawsuit)")),
+        # Customer/employee reviews on Trustpilot, Glassdoor, G2
+        _safe_call("serper_reviews", serper_api.search(
+            f'"{legal_name}" reviews rating site:trustpilot.com OR site:glassdoor.com OR site:g2.com OR site:ambitionbox.com'
+        )),
+        # General company profile — founding, HQ, size, leadership
+        _safe_call("serper_profile", serper_api.search(
+            f'"{legal_name}" company founded headquarters employees overview'
+        )),
+        # Latest general news (positive or negative)
+        _safe_call("serper_news", serper_api.search(
+            f'"{legal_name}" latest news announcement update'
+        )),
+        # Wikipedia company overview (free, no auth)
+        _safe_call("wikipedia", wikipedia_api.get_summary(legal_name)),
+        # NewsAPI financial/regulatory angle
+        _safe_call("newsapi_regulatory", news_api.search_news(
+            f"{legal_name} AND (penalty OR fine OR SEBI OR SEC OR regulatory OR compliance)"
+        )),
     ]
 
     if website_domain:
@@ -86,7 +112,13 @@ async def aggregate_vendor_data(
             _safe_call("microlink", _async_return({"error": "No domain provided"})),
         ])
 
-    address_query = f"{legal_name} {jurisdiction_country or ''}"
+    # Use city or address for a more precise Places lookup
+    if city:
+        address_query = f"{legal_name} {city} {jurisdiction_country or ''}".strip()
+    elif registered_address:
+        address_query = f"{legal_name} {registered_address}".strip()
+    else:
+        address_query = f"{legal_name} {jurisdiction_country or ''}".strip()
     tasks.append(_safe_call("google_places", google_places_api.search_address(address_query)))
 
     tasks.append(_safe_call("sandbox_tsp", _gather_sandbox(

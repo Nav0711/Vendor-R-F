@@ -171,7 +171,10 @@ async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
             founder_ceo_name=vendor.founder_ceo_name,
             tax_identifier=vendor.tax_identifier,
             pan_number=vendor.pan_number,
-            msmed_certificate_number=vendor.msmed_certificate_number
+            msmed_certificate_number=vendor.msmed_certificate_number,
+            city=vendor.city,
+            registered_address=vendor.registered_address,
+            social_handles=vendor.social_handles or {}
         )
 
         # Simulate delay to match "processing time" expectations
@@ -320,6 +323,41 @@ async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
                 "title": f"{vendor.legal_name} | Enterprise Solutions",
                 "publisher": vendor.legal_name
             }
+
+        # 11. Wikipedia
+        wiki_data = aggregated_data.get("wikipedia", {})
+        if wiki_data and wiki_data.get("found") and "error" not in wiki_data:
+            sources_summary["wikipedia"] = wiki_data
+        else:
+            sources_summary["wikipedia"] = {"found": False, "note": "No Wikipedia article found"}
+
+        # 12. Serper — Reviews (Trustpilot / Glassdoor / G2)
+        serper_reviews_data = aggregated_data.get("serper_reviews", {})
+        if isinstance(serper_reviews_data, dict) and serper_reviews_data.get("organic"):
+            sources_summary["serper_reviews"] = serper_reviews_data["organic"]
+        else:
+            sources_summary["serper_reviews"] = []
+
+        # 13. Serper — Company Profile
+        serper_profile_data = aggregated_data.get("serper_profile", {})
+        if isinstance(serper_profile_data, dict) and serper_profile_data.get("organic"):
+            sources_summary["serper_profile"] = serper_profile_data["organic"]
+        else:
+            sources_summary["serper_profile"] = []
+
+        # 14. Serper — Latest News
+        serper_news_data = aggregated_data.get("serper_news", {})
+        if isinstance(serper_news_data, dict) and serper_news_data.get("organic"):
+            sources_summary["serper_news"] = serper_news_data["organic"]
+        else:
+            sources_summary["serper_news"] = []
+
+        # 15. NewsAPI — Regulatory angle
+        newsapi_regulatory_data = aggregated_data.get("newsapi_regulatory", {})
+        if isinstance(newsapi_regulatory_data, dict) and newsapi_regulatory_data.get("articles"):
+            sources_summary["newsapi_regulatory"] = newsapi_regulatory_data["articles"]
+        else:
+            sources_summary["newsapi_regulatory"] = []
 
         tokens_remaining = token_manager.get_balance()
 

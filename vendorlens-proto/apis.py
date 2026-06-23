@@ -489,6 +489,50 @@ class MicrolinkAPI:
             logger.error(f"Microlink API error: {e}")
             return {"error": str(e)}
 
+class WikipediaAPI:
+    """Free Wikipedia REST API — no auth required."""
+    async def get_summary(self, company_name: str) -> dict:
+        if MOCK_MODE:
+            return {"mocked": True, "data": {}}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                search_resp = await client.get(
+                    "https://en.wikipedia.org/w/api.php",
+                    params={
+                        "action": "opensearch",
+                        "search": company_name,
+                        "limit": 3,
+                        "namespace": 0,
+                        "format": "json"
+                    },
+                    headers={"User-Agent": "VendorLens/1.0 (KYB due diligence tool)"}
+                )
+                search_resp.raise_for_status()
+                search_data = search_resp.json()
+                titles = search_data[1] if len(search_data) > 1 else []
+                if not titles:
+                    return {"found": False}
+                title = titles[0]
+                summary_resp = await client.get(
+                    f"https://en.wikipedia.org/api/rest_v1/page/summary/{title.replace(' ', '_')}",
+                    headers={"User-Agent": "VendorLens/1.0 (KYB due diligence tool)"}
+                )
+                if summary_resp.status_code == 404:
+                    return {"found": False}
+                summary_resp.raise_for_status()
+                data = summary_resp.json()
+                return {
+                    "found": True,
+                    "title": data.get("title"),
+                    "description": data.get("description"),
+                    "summary": data.get("extract", "")[:1000],
+                    "page_url": data.get("content_urls", {}).get("desktop", {}).get("page")
+                }
+        except Exception as e:
+            logger.error(f"Wikipedia error: {e}")
+            return {"error": str(e)}
+
+
 # Initialize API clients
 opencorp = OpenCorporatesAPI()
 opensanctions = OpenSanctionsAPI()
@@ -500,3 +544,4 @@ serper_api = SerperAPI()
 news_api = NewsAPIClient()
 google_places_api = GooglePlacesAPI()
 microlink_api = MicrolinkAPI()
+wikipedia_api = WikipediaAPI()
