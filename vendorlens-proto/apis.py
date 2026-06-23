@@ -353,8 +353,12 @@ class SandboxAPI:
                     "valid": True if data else False,
                     "enterprise_type": data.get("enterprise_type", "Unknown"),
                     "name": data.get("company_name"),
+                    "district": data.get("district"),
+                    "state": data.get("state"),
+                    "activity": data.get("major_activity") or data.get("activity"),
                     "msmed_number": msmed_num,
-                    "status": "Active" if data else "Inactive"
+                    "status": "Active" if data else "Inactive",
+                    "raw_response": data
                 }
         except Exception as e:
             logger.error(f"Sandbox MSMED error: {e}")

@@ -373,6 +373,31 @@ async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
         else:
             sources_summary["newsapi_regulatory"] = []
 
+        # 16. Sandbox Intel — entities extracted from GSTIN/PAN/MSMED
+        sandbox_intel = aggregated_data.get("sandbox_intel")
+        if sandbox_intel:
+            sources_summary["sandbox_intel"] = sandbox_intel
+
+        # 17. Sandbox Enrichment — searches run for each alternate name found
+        sandbox_enrichment = aggregated_data.get("sandbox_enrichment")
+        if sandbox_enrichment:
+            # Flatten the by_alternate_name results for the report
+            enrichment_summary = {}
+            for name, results in (sandbox_enrichment.get("by_alternate_name") or {}).items():
+                serper_hits = (results.get("serper") or {}).get("organic", [])
+                gdelt_hits = (results.get("gdelt") or {}).get("results", [])
+                sanctions_hits = (results.get("sanctions") or {}).get("results", [])
+                enrichment_summary[name] = {
+                    "serper_results": serper_hits,
+                    "gdelt_results": gdelt_hits,
+                    "sanctions_results": sanctions_hits
+                }
+            gstin_places = sandbox_enrichment.get("gstin_address_places")
+            sources_summary["sandbox_enrichment"] = {
+                "alternate_names_searched": enrichment_summary,
+                "gstin_address_places": gstin_places
+            }
+
         tokens_remaining = token_manager.get_balance()
 
         scan.raw_data_summary = {

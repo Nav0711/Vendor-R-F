@@ -72,48 +72,75 @@ async def extract_findings_from_data(aggregated_data: dict) -> tuple[list, int]:
     # Build the prompt
     prompt = f"""You are a KYB (Know Your Business) due diligence analyst.
 Analyze the provided data and extract ONLY adverse findings (negative information that increases risk).
-We have gathered data from: OpenCorporates, OpenSanctions, GDELT (News), WHOIS, SSL APIs, Serper (adverse search, reviews, profile, latest news), NewsAPI (adverse + regulatory angles), Google Places, Microlink, and Wikipedia.
+
+## Data Sources in this payload:
+- opencorporates: Company registry lookup
+- opensanctions: Sanctions / PEP screening on legal name + all directors
+- gdelt: Global news search (company + CEO/founder + directors)
+- serper: Adverse web search (fraud/scam)
+- serper_reviews: Review sites — Trustpilot, Glassdoor, G2, AmbitionBox
+- serper_profile: Company overview — founding, HQ, employees
+- serper_news: Latest general news
+- newsapi: Adverse media (fraud/scandal/lawsuit)
+- newsapi_regulatory: Regulatory angle (fines, SEBI/SEC, compliance)
+- wikipedia: Company Wikipedia summary
+- whois / ssl / microlink: Domain intelligence
+- google_places: Physical address / business status
+- sandbox_tsp: India-specific — GSTIN / PAN / MSMED live verification
+- sandbox_intel: Entities extracted from Sandbox — alternate trade names, registered address, business type, industry
+- sandbox_enrichment.by_alternate_name[NAME]: For each alternate name found in GSTIN/PAN/MSMED, results from serper + gdelt + sanctions — treat this as high-signal since it covers operating names the vendor may not have disclosed
+- sandbox_enrichment.gstin_address_places: Google Places result using the GSTIN-verified registered address
 
 ## Data Provided:
 {json.dumps(aggregated_data, indent=2)}
 
 ## Task:
 For EACH adverse finding, output a JSON object with:
-- finding_type: (sanctions_match | news_adverse | regulatory_issue | pep_match | domain_risk | address_risk | review_risk | other)
+- finding_type: (sanctions_match | news_adverse | regulatory_issue | pep_match | domain_risk | address_risk | review_risk | name_mismatch | other)
 - severity: (critical | high | medium | low)
 - title: short summary
-- description: detailed explanation citing the specific source data
-- source_api: (opensanctions | gdelt | opencorporates | whois | ssl | sandbox_tsp | serper | serper_reviews | serper_profile | serper_news | newsapi | newsapi_regulatory | google_places | microlink | wikipedia)
+- description: detailed explanation citing specific source fields and values
+- source_api: the key from the data above that contains the evidence
 - confidence_score: 0.0 to 1.0
 
 ## Analysis Rules:
+
 **Regulatory / Compliance (regulatory_issue):**
-- Sandbox TSP: GSTIN 'Cancelled' or 'Suspended' or valid=false → HIGH risk.
-- Sandbox TSP: PAN Inactive or name mismatch → MEDIUM or HIGH risk.
-- Sandbox TSP: MSMED invalid → MEDIUM risk.
-- newsapi_regulatory: Penalty, SEBI/SEC action, compliance violation → MEDIUM–HIGH risk.
+- sandbox_tsp.gstin: status 'Cancelled' or 'Suspended' or valid=false → HIGH risk
+- sandbox_tsp.pan: Inactive or name mismatch → MEDIUM–HIGH risk
+- sandbox_tsp.msmed: invalid → MEDIUM risk
+- newsapi_regulatory: Penalty, SEBI/SEC action, compliance violation → MEDIUM–HIGH risk
 
 **Adverse Media (news_adverse):**
-- NewsAPI or GDELT: fraud, lawsuits, or scandals → HIGH or CRITICAL risk.
-- serper_news: Recent negative news (layoffs, shutdowns, investigations) → MEDIUM–HIGH risk.
+- newsapi or gdelt: fraud, lawsuits, or scandals → HIGH or CRITICAL risk
+- serper_news: Recent shutdown, investigation, or negative development → MEDIUM–HIGH risk
+- sandbox_enrichment.by_alternate_name[X].gdelt: adverse news under an alternate name → HIGH risk (harder to discover)
+- sandbox_enrichment.by_alternate_name[X].serper: fraud/scam results for an alternate operating name → HIGH risk
+
+**Sanctions / PEP (sanctions_match / pep_match):**
+- opensanctions: Any match on legal name or director → CRITICAL risk
+- sandbox_enrichment.by_alternate_name[X].sanctions: Sanctions match on a trade name not provided by the vendor → CRITICAL risk
+
+**Name Mismatch (name_mismatch):**
+- sandbox_intel.additional_names contains names not matching the submitted legal_name → flag as MEDIUM risk if ≥2 different names appear, since the vendor may be operating under undisclosed identities
 
 **Customer / Reputational Risk (review_risk):**
-- serper_reviews: Consistently poor ratings (1–2 stars) on Trustpilot, Glassdoor, G2, or AmbitionBox → MEDIUM risk.
-- serper_reviews: Widespread fraud, scam, or non-payment complaints from customers/employees → HIGH risk.
-- serper (adverse): Multiple fraud allegations or scam accusations in web results → HIGH risk.
+- serper_reviews: Consistently 1–2 star ratings or widespread fraud/non-payment complaints → MEDIUM–HIGH risk
+- serper (adverse): Multiple fraud allegations in web results → HIGH risk
 
-**Company Profile Anomalies (other / address_risk):**
-- serper_profile: Company claims large scale but has no verifiable web presence, no employees listed, or contradictory founding dates → MEDIUM risk.
-- Wikipedia: Company described as defunct, acquired (and dissolved), or associated with known fraud → HIGH risk.
+**Address / Physical Presence (address_risk):**
+- google_places or sandbox_enrichment.gstin_address_places: Business permanently closed, doesn't exist, or address is a virtual office cluster → HIGH risk
+- serper_profile: No verifiable web presence or contradictory founding information → MEDIUM risk
 
-**Domain / Web Presence (domain_risk):**
-- Microlink: Website unreachable or newly registered → MEDIUM risk.
-- Google Places: Business permanently closed or address matches a known shell company cluster → HIGH risk (address_risk).
+**Domain / Web (domain_risk):**
+- microlink: Unreachable or newly registered domain → MEDIUM risk
+- wikipedia: Company defunct, dissolved, or linked to known fraud → HIGH risk
 
 ## Output:
 Return ONLY a valid JSON array. No preamble. Example:
 [
-  {{"finding_type": "news_adverse", "severity": "high", "title": "...", "description": "...", "source_api": "newsapi", "confidence_score": 0.85}},
+  {{"finding_type": "sanctions_match", "severity": "critical", "title": "...", "description": "...", "source_api": "sandbox_enrichment", "confidence_score": 0.95}},
+  {{"finding_type": "name_mismatch", "severity": "medium", "title": "...", "description": "...", "source_api": "sandbox_intel", "confidence_score": 0.75}},
   {{"finding_type": "review_risk", "severity": "medium", "title": "...", "description": "...", "source_api": "serper_reviews", "confidence_score": 0.70}}
 ]
 
