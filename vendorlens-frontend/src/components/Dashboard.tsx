@@ -12,7 +12,7 @@ const Dashboard = () => {
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
-    
+
     const checkStatus = async () => {
       try {
         const res = await axios.get(`http://localhost:8000/scan/${scanId}/status`);
@@ -43,8 +43,8 @@ const Dashboard = () => {
         <div className="w-full bg-secondary rounded-full h-2">
           <div className="bg-primary h-2 rounded-full animate-pulse" style={{ width: '60%' }}></div>
         </div>
-        <button 
-          onClick={() => navigate('/')} 
+        <button
+          onClick={() => navigate('/')}
           className="mt-8 inline-flex items-center text-sm font-medium text-muted-foreground hover:text-destructive transition-colors"
         >
           <XCircle className="w-4 h-4 mr-2" /> Cancel and Return Home
@@ -56,7 +56,7 @@ const Dashboard = () => {
   if (!report) return null;
 
   const getRiskColor = (level: string) => {
-    switch(level) {
+    switch (level) {
       case 'CRITICAL': return 'bg-red-100 text-red-800 border-red-200';
       case 'HIGH': return 'bg-orange-100 text-orange-800 border-orange-200';
       case 'MEDIUM': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
@@ -68,8 +68,8 @@ const Dashboard = () => {
   return (
     <div className="max-w-5xl mx-auto space-y-8">
       <div className="flex items-center justify-between">
-        <button 
-          onClick={() => navigate('/')} 
+        <button
+          onClick={() => navigate('/')}
           className="inline-flex items-center text-sm font-medium text-muted-foreground hover:text-primary transition-colors"
         >
           <ArrowLeft className="w-4 h-4 mr-1" /> New Scan
@@ -166,46 +166,42 @@ const Dashboard = () => {
             <h3 className="text-xl font-bold tracking-tight">Sources of News & Analysis</h3>
             <p className="text-sm text-muted-foreground">Detailed records of external data feeds and queries performed during this scan.</p>
           </div>
-          
+
           {/* Tab Headers */}
           <div className="flex space-x-2 border-b overflow-x-auto pb-px">
             <button
               onClick={() => setActiveTab('news')}
-              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${
-                activeTab === 'news'
+              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${activeTab === 'news'
                   ? 'border-primary text-primary border-primary'
                   : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}
+                }`}
             >
               Adverse News & Web Search
             </button>
             <button
               onClick={() => setActiveTab('registries')}
-              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${
-                activeTab === 'registries'
+              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${activeTab === 'registries'
                   ? 'border-primary text-primary border-primary'
                   : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}
+                }`}
             >
               Corporate Registries & Domains
             </button>
             <button
               onClick={() => setActiveTab('compliance')}
-              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${
-                activeTab === 'compliance'
+              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${activeTab === 'compliance'
                   ? 'border-primary text-primary border-primary'
                   : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}
+                }`}
             >
               Indian Tax compliance (TSP)
             </button>
             <button
               onClick={() => setActiveTab('other')}
-              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${
-                activeTab === 'other'
+              className={`px-4 py-2 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${activeTab === 'other'
                   ? 'border-primary text-primary border-primary'
                   : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}
+                }`}
             >
               Watchlists & Addresses
             </button>
@@ -286,7 +282,9 @@ const Dashboard = () => {
                   <div className="space-y-2">
                     {report.sources_summary.opencorporates?.map((comp: any, idx: number) => (
                       <div key={idx} className="border-b pb-2 last:border-0 last:pb-0 space-y-1">
-                        <div className="font-bold text-foreground">{comp.name}</div>
+                        <a href={`https://opencorporates.com/companies/${comp.jurisdiction_code?.toLowerCase()}/${comp.company_number}`} target="_blank" rel="noopener noreferrer" className="font-bold text-foreground hover:underline flex items-center">
+                          {comp.name} <ExternalLink className="w-3 h-3 ml-1 text-muted-foreground" />
+                        </a>
                         <div>No: {comp.company_number}</div>
                         <div>Jurisdiction: {comp.jurisdiction_code?.toUpperCase()}</div>
                         <div className="flex items-center space-x-1 mt-1">
@@ -306,7 +304,12 @@ const Dashboard = () => {
                   </div>
                   {report.sources_summary.whois ? (
                     <div className="space-y-1">
-                      <div><span className="text-muted-foreground">Domain:</span> {report.sources_summary.whois.domain_name}</div>
+                      <div>
+                        <span className="text-muted-foreground">Domain:</span>{' '}
+                        <a href={`https://whois.domaintools.com/${report.sources_summary.whois.domain_name}`} target="_blank" rel="noopener noreferrer" className="font-bold text-foreground hover:underline inline-flex items-center">
+                          {report.sources_summary.whois.domain_name} <ExternalLink className="w-3 h-3 ml-1 text-muted-foreground" />
+                        </a>
+                      </div>
                       <div><span className="text-muted-foreground">Registrar:</span> {report.sources_summary.whois.registrar}</div>
                       <div><span className="text-muted-foreground">Created:</span> {report.sources_summary.whois.creation_date ? new Date(report.sources_summary.whois.creation_date).toLocaleDateString() : 'N/A'}</div>
                       <div><span className="text-muted-foreground">Status:</span> {report.sources_summary.whois.status || 'Active'}</div>
@@ -325,9 +328,9 @@ const Dashboard = () => {
                   {report.sources_summary.ssl ? (
                     <div className="space-y-2">
                       <div className="flex items-center space-x-2">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${report.sources_summary.ssl.has_ssl ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                          {report.sources_summary.ssl.has_ssl ? 'VALID SSL' : 'NO SSL'}
-                        </span>
+                        <a href={`https://www.ssllabs.com/ssltest/analyze.html?d=${report.subject.domain}`} target="_blank" rel="noopener noreferrer" className={`px-2 py-0.5 rounded text-[10px] font-bold hover:underline inline-flex items-center ${report.sources_summary.ssl.has_ssl ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                          {report.sources_summary.ssl.has_ssl ? 'VALID SSL' : 'NO SSL'} <ExternalLink className="w-3 h-3 ml-1" />
+                        </a>
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${!report.sources_summary.ssl.is_expired ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                           {!report.sources_summary.ssl.is_expired ? 'ACTIVE' : 'EXPIRED'}
                         </span>
@@ -351,7 +354,9 @@ const Dashboard = () => {
                   {/* GSTIN */}
                   {report.sources_summary.sandbox_tsp?.gstin && (
                     <div className="bg-card p-4 rounded-lg border space-y-2">
-                      <div className="font-bold text-foreground border-b pb-1">GSTIN Registry Details</div>
+                      <a href="https://services.gst.gov.in/services/searchtp" target="_blank" rel="noopener noreferrer" className="font-bold text-foreground border-b pb-1 hover:underline flex items-center">
+                        GSTIN Registry Details <ExternalLink className="w-3 h-3 ml-1 text-muted-foreground" />
+                      </a>
                       <div><span className="text-muted-foreground">Status:</span> <span className="font-bold text-green-600">{report.sources_summary.sandbox_tsp.gstin.status || 'Active'}</span></div>
                       <div><span className="text-muted-foreground">Verification:</span> <span className="font-bold text-green-600">{report.sources_summary.sandbox_tsp.gstin.valid ? 'VALID' : 'INVALID'}</span></div>
                       {report.sources_summary.sandbox_tsp.gstin.name && (
@@ -363,7 +368,9 @@ const Dashboard = () => {
                   {/* PAN */}
                   {report.sources_summary.sandbox_tsp?.pan && (
                     <div className="bg-card p-4 rounded-lg border space-y-2">
-                      <div className="font-bold text-foreground border-b pb-1">PAN Registry Details</div>
+                      <a href="https://eportal.incometax.gov.in/iec/foservices/#/pre-login/verifyYourPAN" target="_blank" rel="noopener noreferrer" className="font-bold text-foreground border-b pb-1 hover:underline flex items-center">
+                        PAN Registry Details <ExternalLink className="w-3 h-3 ml-1 text-muted-foreground" />
+                      </a>
                       <div><span className="text-muted-foreground">Status:</span> <span className="font-bold text-green-600">{report.sources_summary.sandbox_tsp.pan.status || 'Active'}</span></div>
                       <div><span className="text-muted-foreground">Verification:</span> <span className="font-bold text-green-600">{report.sources_summary.sandbox_tsp.pan.valid ? 'VALID' : 'INVALID'}</span></div>
                       {report.sources_summary.sandbox_tsp.pan.name && (
@@ -371,7 +378,7 @@ const Dashboard = () => {
                       )}
                     </div>
                   )}
-                  
+
                   {!report.sources_summary.sandbox_tsp?.gstin && !report.sources_summary.sandbox_tsp?.pan && (
                     <div className="text-muted-foreground col-span-2">No GSTIN/PAN data checked for this vendor.</div>
                   )}
@@ -392,7 +399,9 @@ const Dashboard = () => {
                       <div key={idx} className="border-b pb-2 last:border-0 last:pb-0 space-y-1">
                         {sanc.caption ? (
                           <>
-                            <div className="font-bold text-foreground">{sanc.caption} ({sanc.schema})</div>
+                            <a href={`https://www.opensanctions.org/search/?q=${encodeURIComponent(sanc.caption)}`} target="_blank" rel="noopener noreferrer" className="font-bold text-foreground hover:underline flex items-center">
+                              {sanc.caption} ({sanc.schema}) <ExternalLink className="w-3 h-3 ml-1 text-muted-foreground" />
+                            </a>
                             {sanc.properties?.country && <div>Country: {sanc.properties.country.join(', ')}</div>}
                             {sanc.properties?.status && <div>Status: {sanc.properties.status.join(', ')}</div>}
                           </>
@@ -413,7 +422,9 @@ const Dashboard = () => {
                     </div>
                     {report.sources_summary.google_places?.map((place: any, idx: number) => (
                       <div key={idx} className="space-y-1">
-                        <div className="font-bold">{place.name}</div>
+                        <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name + ' ' + place.formatted_address)}`} target="_blank" rel="noopener noreferrer" className="font-bold text-foreground hover:underline flex items-center">
+                          {place.name} <ExternalLink className="w-3 h-3 ml-1 text-muted-foreground" />
+                        </a>
                         <div className="text-muted-foreground">{place.formatted_address}</div>
                         <div>Status: <span className="font-bold text-green-600">{place.business_status}</span></div>
                       </div>
@@ -427,12 +438,30 @@ const Dashboard = () => {
                         <span>Website Content Metadata (Microlink)</span>
                       </div>
                       <div>
-                        <div className="font-bold">{report.sources_summary.microlink.title}</div>
+                        <a href={report.subject.domain?.startsWith('http') ? report.subject.domain : `https://${report.subject.domain}`} target="_blank" rel="noopener noreferrer" className="font-bold text-foreground hover:underline flex items-center">
+                          {report.sources_summary.microlink.title} <ExternalLink className="w-3 h-3 ml-1 text-muted-foreground" />
+                        </a>
                         <div className="text-muted-foreground">Publisher: {report.sources_summary.microlink.publisher || 'N/A'}</div>
                       </div>
                     </div>
                   )}
                 </div>
+
+                {/* Wikipedia */}
+                {report.sources_summary.wikipedia?.found && (
+                  <div className="bg-secondary/20 p-4 rounded-lg border space-y-3 col-span-1 md:col-span-2">
+                    <div className="flex items-center space-x-2 font-bold text-sm text-primary">
+                      <Globe className="w-4 h-4" />
+                      <span>Wikipedia Summary</span>
+                    </div>
+                    <div className="space-y-1 text-xs">
+                      <a href={report.sources_summary.wikipedia.page_url} target="_blank" rel="noopener noreferrer" className="font-bold text-foreground hover:underline flex items-center">
+                        {report.sources_summary.wikipedia.title} <ExternalLink className="w-3 h-3 ml-1 text-muted-foreground" />
+                      </a>
+                      <div className="text-muted-foreground mt-1">{report.sources_summary.wikipedia.summary}</div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
