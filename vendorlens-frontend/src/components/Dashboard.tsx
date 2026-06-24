@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { ArrowLeft, XCircle, Building2 } from 'lucide-react';
-import { type TabKey } from './dashboard/types';
+import { type TabKey, type NewsItem } from './dashboard/types';
 import { getRisk, tryHost } from './dashboard/utils';
 import OverviewTab from './dashboard/OverviewTab';
 import FindingsTab from './dashboard/FindingsTab';
@@ -66,13 +66,17 @@ const Dashboard = () => {
   const findingsCount = report.adverse_findings?.length ?? 0;
   const hasIndia      = !!(ss.sandbox_tsp || ss.sandbox_intel);
 
-  const allNews: { source: string; title: string; meta: string; url: string }[] = [
-    ...(ss.gdelt              ?? []).map((a: any) => ({ source: 'GDELT',       title: a.title, meta: a.domain,      url: a.url  })),
-    ...(ss.newsapi            ?? []).map((a: any) => ({ source: 'NewsAPI',     title: a.title, meta: a.source,      url: a.url  })),
-    ...(ss.newsapi_regulatory ?? []).map((a: any) => ({ source: 'Regulatory',  title: a.title, meta: a.source,      url: a.url  })),
-    ...(ss.serper_news        ?? []).map((a: any) => ({ source: 'Google',      title: a.title, meta: tryHost(a.link), url: a.link })),
-  ].filter(a => a.title);
+  // Use backend-combined list (with AI insight) if available; fall back to client-side aggregation
+  const allNews: NewsItem[] = (ss.news_combined?.length ?? 0) > 0
+    ? (ss.news_combined as NewsItem[])
+    : [
+        ...(ss.gdelt              ?? []).map((a: any) => ({ source: 'GDELT',      title: a.title, meta: a.domain,       url: a.url  })),
+        ...(ss.newsapi            ?? []).map((a: any) => ({ source: 'NewsAPI',    title: a.title, meta: a.source,       url: a.url  })),
+        ...(ss.newsapi_regulatory ?? []).map((a: any) => ({ source: 'Regulatory', title: a.title, meta: a.source,       url: a.url  })),
+        ...(ss.serper_news        ?? []).map((a: any) => ({ source: 'Google',     title: a.title, meta: tryHost(a.link), url: a.link })),
+      ].filter((a): a is NewsItem => !!a.title);
 
+  // Append enrichment GDELT items (always without AI insight — India-only enrichment path)
   for (const [name, data] of Object.entries(
     (ss.sandbox_enrichment?.alternate_names_searched ?? {}) as Record<string, any>
   )) {

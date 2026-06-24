@@ -1,13 +1,16 @@
 import { Landmark, ShieldAlert, Globe, MapPin, FileText, CheckCircle2 } from 'lucide-react';
 import Row from './Row';
 import Section from './Section';
+import SectionInsight from './SectionInsight';
 
-const OverviewTab = ({ ss, report }: { ss: any; report: any }) => (
-  <div className="space-y-4 animate-in fade-in duration-200">
+const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
+  const sa = report.section_analysis ?? {};
+  return (
+    <div className="space-y-4 animate-in fade-in duration-200">
 
-    <div className="grid sm:grid-cols-2 gap-4">
       {/* Corporate Registry */}
       <Section title="Corporate Registry" icon={<Landmark className="w-4 h-4" />}>
+        {sa.corporate_registry && <SectionInsight {...sa.corporate_registry} />}
         {(ss.opencorporates?.length ?? 0) > 0 ? ss.opencorporates.map((c: any, i: number) => (
           <div key={i}>
             <Row label="Company"       value={c.name}
@@ -37,6 +40,7 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => (
 
       {/* Sanctions & Watchlists */}
       <Section title="Sanctions & Watchlists" icon={<ShieldAlert className="w-4 h-4" />}>
+        {sa.sanctions_watchlists && <SectionInsight {...sa.sanctions_watchlists} />}
         {ss.opensanctions?.some((s: any) => s.caption) ? (
           ss.opensanctions.filter((s: any) => s.caption).map((s: any, i: number) => (
             <div key={i}>
@@ -56,11 +60,10 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => (
           } />
         )}
       </Section>
-    </div>
 
-    <div className="grid sm:grid-cols-2 gap-4">
       {/* Domain & SSL */}
       <Section title="Domain & SSL" icon={<Globe className="w-4 h-4" />}>
+        {sa.domain_ssl && <SectionInsight {...sa.domain_ssl} />}
         {ss.whois && (
           <>
             <Row label="Domain"    value={Array.isArray(ss.whois.domain_name) ? ss.whois.domain_name[0] : ss.whois.domain_name}
@@ -94,6 +97,7 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => (
 
       {/* Physical Address */}
       <Section title="Physical Address" icon={<MapPin className="w-4 h-4" />}>
+        {sa.physical_address && <SectionInsight {...sa.physical_address} />}
         {(ss.google_places?.length ?? 0) > 0 ? ss.google_places.map((p: any, i: number) => (
           <div key={i}>
             <Row label="Name"    value={p.name} />
@@ -115,23 +119,24 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => (
           <Row label="Address" value="No location data found" />
         )}
       </Section>
+
+      {/* Wikipedia */}
+      {ss.wikipedia?.found && (
+        <Section title="Wikipedia" icon={<FileText className="w-4 h-4" />}>
+          {sa.wikipedia && <SectionInsight {...sa.wikipedia} />}
+          <Row label="Article"     value={ss.wikipedia.title}
+            link={ss.wikipedia.page_url} linkLabel="Wikipedia" />
+          {ss.wikipedia.description && <Row label="Description" value={ss.wikipedia.description} />}
+          {ss.wikipedia.summary && (
+            <div className="px-4 py-2.5 text-xs text-muted-foreground leading-relaxed border-t pl-[9rem]">
+              {ss.wikipedia.summary.slice(0, 350)}{ss.wikipedia.summary.length > 350 ? '…' : ''}
+            </div>
+          )}
+        </Section>
+      )}
+
     </div>
-
-    {/* Wikipedia */}
-    {ss.wikipedia?.found && (
-      <Section title="Wikipedia" icon={<FileText className="w-4 h-4" />}>
-        <Row label="Article"     value={ss.wikipedia.title}
-          link={ss.wikipedia.page_url} linkLabel="Wikipedia" />
-        {ss.wikipedia.description && <Row label="Description" value={ss.wikipedia.description} />}
-        {ss.wikipedia.summary && (
-          <div className="px-4 py-2.5 text-xs text-muted-foreground leading-relaxed border-t pl-[9rem]">
-            {ss.wikipedia.summary.slice(0, 350)}{ss.wikipedia.summary.length > 350 ? '…' : ''}
-          </div>
-        )}
-      </Section>
-    )}
-
-  </div>
-);
+  );
+};
 
 export default OverviewTab;

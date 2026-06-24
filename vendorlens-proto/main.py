@@ -153,6 +153,45 @@ async def create_intake(
         db.rollback()
         raise HTTPException(400, str(e))
 
+def _build_news_flat_list(aggregated_data: dict) -> list:
+    """Flatten all news sources into a single indexed list for LLM article-level analysis."""
+    flat = []
+
+    gdelt_data = aggregated_data.get("gdelt", {})
+    for _, data in gdelt_data.items():
+        if isinstance(data, dict):
+            for item in data.get("results", []):
+                if item.get("title"):
+                    flat.append({"source": "GDELT", "title": item["title"],
+                                 "url": item.get("url", ""), "meta": item.get("domain", "")})
+
+    newsapi_data = aggregated_data.get("newsapi", {})
+    if isinstance(newsapi_data, dict):
+        for item in newsapi_data.get("articles", []):
+            if item.get("title"):
+                flat.append({"source": "NewsAPI", "title": item["title"],
+                             "url": item.get("url", ""), "meta": item.get("source", "")})
+
+    newsapi_reg = aggregated_data.get("newsapi_regulatory", {})
+    if isinstance(newsapi_reg, dict):
+        for item in newsapi_reg.get("articles", []):
+            if item.get("title"):
+                flat.append({"source": "Regulatory", "title": item["title"],
+                             "url": item.get("url", ""), "meta": item.get("source", "")})
+
+    serper_news = aggregated_data.get("serper_news", {})
+    if isinstance(serper_news, dict):
+        for item in serper_news.get("organic", []):
+            if item.get("title"):
+                flat.append({"source": "Google", "title": item["title"],
+                             "url": item.get("link", ""), "meta": item.get("link", "")})
+
+    for i, item in enumerate(flat):
+        item["index"] = i
+
+    return flat
+
+
 async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
     db = next(get_db())
     try:
@@ -180,7 +219,8 @@ async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
         # Simulate delay to match "processing time" expectations
         await asyncio.sleep(3)
 
-        findings, tokens_used = await extract_findings_from_data(aggregated_data)
+        news_flat_list = _build_news_flat_list(aggregated_data)
+        findings, tokens_used, section_analysis, article_analysis = await extract_findings_from_data(aggregated_data, news_flat_list)
 
         # PRD Scoring logic simulation
         critical_count = sum(1 for f in findings if f['severity'] == 'critical')
@@ -398,6 +438,20 @@ async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
                 "gstin_address_places": gstin_places
             }
 
+        # Build news_combined: flat list enriched with per-article AI analysis
+        analysis_by_index = {item["index"]: item for item in article_analysis}
+        news_combined = []
+        for item in news_flat_list:
+            combined = {"source": item["source"], "title": item["title"],
+                        "url": item["url"], "meta": item["meta"]}
+            ai = analysis_by_index.get(item["index"], {})
+            if ai:
+                combined["summary"] = ai.get("summary", "")
+                combined["relevance"] = ai.get("relevance", 50)
+                combined["criticality"] = ai.get("criticality", 50)
+            news_combined.append(combined)
+        sources_summary["news_combined"] = news_combined
+
         tokens_remaining = token_manager.get_balance()
 
         scan.raw_data_summary = {
@@ -408,7 +462,8 @@ async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
             },
             "tokens_used": tokens_used,
             "tokens_remaining": tokens_remaining,
-            "sources_summary": sources_summary
+            "sources_summary": sources_summary,
+            "section_analysis": section_analysis,
         }
 
         for f in findings:
@@ -513,5 +568,6 @@ async def get_report(scan_id: str, db: Session = Depends(get_db)):
         "tokens_used": scan.raw_data_summary.get("tokens_used", 0) if (scan.raw_data_summary and isinstance(scan.raw_data_summary, dict)) else 0,
         "tokens_remaining": scan.raw_data_summary.get("tokens_remaining", token_manager.get_balance()) if (scan.raw_data_summary and isinstance(scan.raw_data_summary, dict)) else token_manager.get_balance(),
         "sources_summary": scan.raw_data_summary.get("sources_summary", {}) if (scan.raw_data_summary and isinstance(scan.raw_data_summary, dict)) else {},
+        "section_analysis": scan.raw_data_summary.get("section_analysis", {}) if (scan.raw_data_summary and isinstance(scan.raw_data_summary, dict)) else {},
         "adverse_findings": findings_list
     }
