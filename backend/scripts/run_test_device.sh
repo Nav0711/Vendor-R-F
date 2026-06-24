@@ -1,12 +1,12 @@
 #!/bin/bash
 # run_test_device.sh
-# Run this from the vendorlens-proto root directory.
+# Run this from the backend root directory.
 
 echo "Setting up testing environment for VendorLens..."
 
 # Ensure we are in the right directory
 if [ ! -f "main.py" ]; then
-    echo "Error: Please run this script from the vendorlens-proto root directory."
+    echo "Error: Please run this script from the backend root directory."
     echo "Usage: ./scripts/run_test_device.sh"
     exit 1
 fi

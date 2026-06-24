@@ -9,11 +9,11 @@ from datetime import datetime
 import pandas as pd
 import io
 
-from database import get_db, engine
-from models import Base, VendorInput, KybScan, AdverseFinding, ScanSubject
-from data_aggregator import aggregate_vendor_data
-from llm_service import extract_findings_from_data
-from token_manager import token_manager
+from app.core.database import get_db, engine
+from app.core.models import Base, VendorInput, KybScan, AdverseFinding, ScanSubject
+from app.services.data_aggregator import aggregate_vendor_data
+from app.services.llm_service import extract_findings_from_data
+from app.services.token_manager import token_manager
 
 Base.metadata.create_all(bind=engine)
 

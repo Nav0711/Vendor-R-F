@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
-from main import app
-from database import SessionLocal
+from app.main import app
+from app.core.database import SessionLocal
 
 client = TestClient(app)
 

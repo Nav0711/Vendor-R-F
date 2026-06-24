@@ -1,4 +1,4 @@
-from apis import (
+from app.api.endpoints import (
     opencorp, opensanctions, gdelt, whois_api, ssl_api, sandbox_api,
     serper_api, news_api, google_places_api, microlink_api, wikipedia_api
 )
