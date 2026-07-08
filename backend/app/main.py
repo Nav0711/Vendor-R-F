@@ -216,7 +216,8 @@ async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
                 msmed_certificate_number=vendor.msmed_certificate_number,
                 city=vendor.city,
                 registered_address=vendor.registered_address,
-                social_handles=vendor.social_handles or {}
+                social_handles=vendor.social_handles or {},
+                corporate_email_domain=vendor.corporate_email_domain,
             ),
             timeout=240
         )
@@ -347,21 +348,25 @@ async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
                 "is_expired": False
             }
 
-        # 8. Sandbox TSP
-        sandbox_data = aggregated_data.get("sandbox_tsp", {})
+        # 8. AuthBridge — identity verification + fraud detection
+        ab_data = aggregated_data.get("authbridge_tsp", {})
         has_indian_id = any([vendor.tax_identifier, vendor.pan_number, vendor.msmed_certificate_number])
-        if sandbox_data and isinstance(sandbox_data, dict) and not sandbox_data.get("error"):
-            # Real verification data returned
-            sources_summary["sandbox_tsp"] = sandbox_data
+        if ab_data and isinstance(ab_data, dict) and not ab_data.get("error"):
+            sources_summary["authbridge_tsp"] = ab_data
+            # Keep legacy key so existing LLM prompt / frontend still works
+            sources_summary["sandbox_tsp"] = ab_data
         elif has_indian_id:
-            # Indian IDs were provided but verification failed or was skipped — show honest status
-            sources_summary["sandbox_tsp"] = {
+            fallback = {
                 "gstin": {"status": "Not Verified", "note": "Live check unavailable"} if vendor.tax_identifier else {"status": "Not Provided"},
                 "pan":   {"status": "Not Verified", "note": "Live check unavailable"} if vendor.pan_number else {"status": "Not Provided"},
                 "msmed": {"status": "Not Verified", "note": "Live check unavailable"} if vendor.msmed_certificate_number else {"status": "Not Provided"},
             }
+            sources_summary["authbridge_tsp"] = fallback
+            sources_summary["sandbox_tsp"]    = fallback
         else:
-            sources_summary["sandbox_tsp"] = {"status": "Not Applicable", "note": "No Indian identifiers provided"}
+            note = {"status": "Not Applicable", "note": "No Indian identifiers provided"}
+            sources_summary["authbridge_tsp"] = note
+            sources_summary["sandbox_tsp"]    = note
 
         # 9. Google Places
         places_data = aggregated_data.get("google_places", {})
@@ -427,24 +432,23 @@ async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
         else:
             sources_summary["newsapi_regulatory"] = []
 
-        # 16. Sandbox Intel — entities extracted from GSTIN/PAN/MSMED
-        sandbox_intel = aggregated_data.get("sandbox_intel")
-        if sandbox_intel:
-            sources_summary["sandbox_intel"] = sandbox_intel
+        # 16. AuthBridge Intel — entities extracted from GSTIN/PAN/MSMED
+        ab_intel = aggregated_data.get("authbridge_intel") or aggregated_data.get("sandbox_intel")
+        if ab_intel:
+            sources_summary["authbridge_intel"] = ab_intel
+            sources_summary["sandbox_intel"]    = ab_intel  # legacy key
 
-        # 17. Sandbox Enrichment — full search graph re-run for each alternate name found
-        sandbox_enrichment = aggregated_data.get("sandbox_enrichment")
-        if sandbox_enrichment:
-            def _organic(r):  return (r or {}).get("organic", [])
-            def _articles(r): return (r or {}).get("articles", [])
-            def _results(r):  return (r or {}).get("results", [])
+        # 17. AuthBridge Enrichment — full search graph re-run for each alternate name
+        ab_enrichment = aggregated_data.get("authbridge_enrichment") or aggregated_data.get("sandbox_enrichment")
+        if ab_enrichment:
+            def _organic(r):   return (r or {}).get("organic", [])
+            def _articles(r):  return (r or {}).get("articles", [])
+            def _results(r):   return (r or {}).get("results", [])
             def _companies(r): return (r or {}).get("companies", [])
 
-            # Flatten the by_alternate_name results for the report
             enrichment_summary = {}
-            for name, results in (sandbox_enrichment.get("by_alternate_name") or {}).items():
+            for name, results in (ab_enrichment.get("by_alternate_name") or {}).items():
                 enrichment_summary[name] = {
-                    # Adverse Serper kept under the legacy key for backward compatibility
                     "serper_results":     _organic(results.get("serper_adverse")),
                     "reviews_results":    _organic(results.get("serper_reviews")),
                     "profile_results":    _organic(results.get("serper_profile")),
@@ -456,11 +460,22 @@ async def run_scan_workflow(scan_id: str, input_id: str, scan_type: str):
                     "wikipedia":          results.get("wikipedia") or {},
                     "opencorporates":     _companies(results.get("opencorporates")),
                 }
-            gstin_places = sandbox_enrichment.get("gstin_address_places")
-            sources_summary["sandbox_enrichment"] = {
-                "alternate_names_searched": enrichment_summary,
-                "gstin_address_places": gstin_places
-            }
+            gstin_places = ab_enrichment.get("gstin_address_places")
+            enrichment_block = {"alternate_names_searched": enrichment_summary, "gstin_address_places": gstin_places}
+            sources_summary["authbridge_enrichment"] = enrichment_block
+            sources_summary["sandbox_enrichment"]    = enrichment_block  # legacy key
+
+        # 18. AuthBridge Fraud Detection — court, defaulting director, global sanctions
+        ab_raw = aggregated_data.get("authbridge_tsp", {})
+        if isinstance(ab_raw, dict):
+            if ab_raw.get("court_check"):
+                sources_summary["authbridge_court_check"] = ab_raw["court_check"]
+            if ab_raw.get("defaulting_director"):
+                sources_summary["authbridge_defaulting_director"] = ab_raw["defaulting_director"]
+            if ab_raw.get("global_sanctions"):
+                sources_summary["authbridge_global_sanctions"] = ab_raw["global_sanctions"]
+            if ab_raw.get("email_verification"):
+                sources_summary["authbridge_email_verification"] = ab_raw["email_verification"]
 
         # Build news_combined: flat list enriched with per-article AI analysis
         analysis_by_index = {item["index"]: item for item in article_analysis}

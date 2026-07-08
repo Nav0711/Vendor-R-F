@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, JSON, Boolean, ForeignKey
+from sqlalchemy import Column, String, Integer, DateTime, JSON, Boolean, ForeignKey, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -65,13 +65,13 @@ class AdverseFinding(Base):
     confidence_score = Column(Integer)
     
     title = Column(String(500), nullable=False)
-    detail = Column(String(2000))
+    detail = Column(Text)
     
     source_tool = Column(String(50))
     source_urls = Column(JSON)
     source_name = Column(String(255))
     finding_date = Column(DateTime)
-    raw_excerpt = Column(String(1000))
+    raw_excerpt = Column(Text)
     
     requires_human_review = Column(Boolean, default=True)
     recommended_action = Column(String(50))

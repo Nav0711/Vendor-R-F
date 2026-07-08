@@ -4,10 +4,11 @@ sqlalchemy
 pydantic
 python-dotenv
 httpx
-anthropic
+google-genai
 pydantic-settings
 pytest
-psycopg2-binary
+pymysql
+cryptography
 pandas
 openpyxl
 python-multipart

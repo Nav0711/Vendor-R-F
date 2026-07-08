@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+test.db
+token_state.json
+*.log
+tests/

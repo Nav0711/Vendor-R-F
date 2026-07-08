@@ -1,0 +1,39 @@
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-vendorlens_dev}
+      MYSQL_DATABASE: ${MYSQL_DB:-vendorlens}
+      MYSQL_ROOT_HOST: "%"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "--password=${MYSQL_PASSWORD:-vendorlens_dev}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      # Override host so backend talks to the mysql container, not localhost
+      MYSQL_HOST: mysql
+    volumes:
+      # Persist token balance across container restarts
+      - ./backend/token_state.json:/app/token_state.json
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql_data:

@@ -71,7 +71,7 @@ const Dashboard = () => {
   const riskLevel     = report.risk_summary?.overall_risk_level ?? 'UNKNOWN';
   const riskStyles    = getRisk(riskLevel);
   const findingsCount = report.adverse_findings?.length ?? 0;
-  const hasIndia      = !!(ss.sandbox_tsp || ss.sandbox_intel);
+  const hasAuthBridge = !!(ss.authbridge_tsp || ss.authbridge_intel || ss.sandbox_tsp || ss.sandbox_intel);
 
   // Use backend-combined list (with AI insight) if available; fall back to client-side aggregation
   const allNews: NewsItem[] = (ss.news_combined?.length ?? 0) > 0
@@ -85,7 +85,7 @@ const Dashboard = () => {
 
   // Append enrichment GDELT items (always without AI insight — India-only enrichment path)
   for (const [name, data] of Object.entries(
-    (ss.sandbox_enrichment?.alternate_names_searched ?? {}) as Record<string, any>
+    ((ss.authbridge_enrichment ?? ss.sandbox_enrichment)?.alternate_names_searched ?? {}) as Record<string, any>
   )) {
     for (const item of (data as any).gdelt_results ?? []) {
       if (item.title) allNews.push({
@@ -99,7 +99,7 @@ const Dashboard = () => {
     { key: 'findings',  label: 'Findings',    count: findingsCount },
     { key: 'news',      label: 'News & Media', count: allNews.length },
     { key: 'web',       label: 'Web & Reviews' },
-    ...(hasIndia ? [{ key: 'india' as TabKey, label: 'India Verification' }] : []),
+    ...(hasAuthBridge ? [{ key: 'india' as TabKey, label: 'AuthBridge Checks' }] : []),
   ];
 
   // ── Render ─────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-from anthropic import AsyncAnthropic
+from google import genai
 import json
 import os
 import logging
@@ -7,9 +7,10 @@ import random
 logger = logging.getLogger(__name__)
 
 MOCK_MODE = os.getenv("MOCK_API_CALLS", "false").lower() == "true" or os.getenv("TEST_MODE", "false").lower() == "true"
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
-api_key = os.getenv("ANTHROPIC_API_KEY")
-client = AsyncAnthropic(api_key=api_key) if api_key else None
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+api_key = os.getenv("GEMINI_API_KEY")
+
+client = genai.Client(api_key=api_key) if api_key else None
 
 _CLEAN_SECTION_ANALYSIS = {
     "corporate_registry":   {"summary": "Entity shows active registration with no dissolution or filing irregularities detected.", "relevance": 85, "criticality": 10},
@@ -30,7 +31,7 @@ _CLEAN_ARTICLE_ANALYSIS = [
 
 async def extract_findings_from_data(aggregated_data: dict, news_flat_list: list) -> tuple[list, int, dict, list]:
     """
-    Send aggregated API data to Claude and extract adverse findings, section-level analysis,
+    Send aggregated API data to Gemini and extract adverse findings, section-level analysis,
     and per-article news analysis.
     Returns: (findings, tokens_used, section_analysis, news_article_analysis)
     """
@@ -133,10 +134,17 @@ Analyze the provided data and return a structured JSON object with three keys: f
 - wikipedia: Company Wikipedia summary
 - whois / ssl / microlink: Domain intelligence
 - google_places: Physical address / business status
-- sandbox_tsp: India-specific — GSTIN / PAN / MSMED live verification (AuthBridge)
-- sandbox_intel: Entities extracted from verification — alternate trade names, registered address, business type, industry
-- sandbox_enrichment.by_alternate_name[NAME]: For each alternate/registered name recovered from GSTIN/PAN/MSMED, the FULL search graph re-run under that real name — serper_results (adverse), reviews_results, profile_results, news_results, newsapi_results (adverse media), regulatory_results (regulatory/penalty news), gdelt_results, sanctions_results, wikipedia, opencorporates. Treat adverse hits here as HIGH signal: they attach to the company's actual registered identity, not just the submitted name.
-- sandbox_enrichment.gstin_address_places: Google Places result using the GSTIN-verified registered address
+- authbridge_tsp / sandbox_tsp: AuthBridge live verification results — contains the sub-keys below:
+    .gstin: GSTIN status (Active/Cancelled/Suspended), taxpayer name, registration date (India)
+    .pan: PAN validity, name on record (India)
+    .msmed: MSME/Udyam status, enterprise type, district (India)
+    .email_verification: corporate email domain validity, deliverability, disposable-domain flag, MX records, risk level
+    .court_check: dict keyed by entity/director name → court case records from Indian courts
+    .defaulting_director: dict keyed by director name → MCA defaulter/disqualification status
+    .global_sanctions: dict keyed by entity/director name → AuthBridge global sanctions matches
+- authbridge_intel / sandbox_intel: Entities extracted from GSTIN/PAN/MSMED — alternate trade names, registered address, business type, industry
+- authbridge_enrichment.by_alternate_name[NAME] / sandbox_enrichment.by_alternate_name[NAME]: For each alternate/registered name recovered from GSTIN/PAN/MSMED, the FULL search graph re-run — serper_results (adverse), reviews_results, profile_results, news_results, newsapi_results (adverse media), regulatory_results (regulatory/penalty news), gdelt_results, sanctions_results, wikipedia, opencorporates. Treat adverse hits here as HIGH signal.
+- authbridge_enrichment.gstin_address_places: Google Places result using the GSTIN-verified registered address
 {news_index_block}
 
 ## Aggregated Data:
@@ -145,7 +153,7 @@ Analyze the provided data and return a structured JSON object with three keys: f
 ## Task:
 Return a single JSON object with exactly these three keys:
 
-### 1. "findings" — array of adverse findings (same as before)
+### 1. "findings" — array of adverse findings
 For EACH adverse finding include:
 - finding_type: (sanctions_match | news_adverse | regulatory_issue | pep_match | domain_risk | address_risk | review_risk | name_mismatch | other)
 - severity: (critical | high | medium | low)
@@ -181,9 +189,10 @@ For each article (referenced by its [index]):
 ## Analysis Rules:
 
 **Regulatory / Compliance (regulatory_issue):**
-- sandbox_tsp.gstin: status 'Cancelled' or 'Suspended' or valid=false → HIGH risk
-- sandbox_tsp.pan: Inactive or name mismatch → MEDIUM–HIGH risk
-- sandbox_tsp.msmed: invalid → MEDIUM risk
+- authbridge_tsp.gstin: status 'Cancelled' or 'Suspended' or valid=false → HIGH risk
+- authbridge_tsp.pan: Inactive or name mismatch → MEDIUM–HIGH risk
+- authbridge_tsp.msmed: invalid → MEDIUM risk
+- authbridge_tsp.email_verification.disposable=true or risk='high' → MEDIUM risk (use of personal/disposable email domain suggests non-corporate entity)
 - newsapi_regulatory: Penalty, SEBI/SEC action, compliance violation → MEDIUM–HIGH risk
 
 **Adverse Media (news_adverse):**
@@ -193,7 +202,15 @@ For each article (referenced by its [index]):
 
 **Sanctions / PEP (sanctions_match / pep_match):**
 - opensanctions: Any match on legal name or director → CRITICAL risk
-- sandbox_enrichment.by_alternate_name[X].sanctions: Sanctions match on a trade name → CRITICAL risk
+- authbridge_tsp.global_sanctions[X].is_sanctioned=true: AuthBridge global sanctions hit → CRITICAL risk
+- authbridge_enrichment.by_alternate_name[X].sanctions: Sanctions match on a trade name → CRITICAL risk
+
+**Court Records (regulatory_issue or news_adverse):**
+- authbridge_tsp.court_check[X].cases_found > 0: Active litigation found for entity or director → HIGH risk
+- authbridge_tsp.court_check[X].cases_found > 2: Multiple court cases → CRITICAL risk
+
+**Defaulting Director (regulatory_issue):**
+- authbridge_tsp.defaulting_director[X].is_defaulter=true: Director listed as MCA defaulter → HIGH–CRITICAL risk
 
 **Name Mismatch (name_mismatch):**
 - sandbox_intel.additional_names contains names not matching submitted legal_name → MEDIUM risk if ≥2 different names
@@ -209,7 +226,7 @@ For each article (referenced by its [index]):
 - wikipedia: Company defunct, dissolved, or linked to known fraud → HIGH risk
 
 ## Output format:
-Return ONLY a valid JSON object. No preamble, no markdown. Example structure:
+Return ONLY a valid JSON object. No preamble, no markdown fences. Example structure:
 {{
   "findings": [
     {{"finding_type": "sanctions_match", "severity": "critical", "title": "...", "description": "...", "source_api": "opensanctions", "confidence_score": 0.95}}
@@ -235,16 +252,14 @@ If NO adverse findings, set "findings" to [].
 If no news articles were provided, set "news_article_analysis" to []."""
 
     try:
-        logger.info("Calling Claude for findings + section analysis + article analysis...")
+        logger.info(f"Calling Gemini ({GEMINI_MODEL}) for findings + section analysis + article analysis...")
 
-        message = await client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=5000,
-            messages=[{"role": "user", "content": prompt}]
+        response = await client.aio.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
         )
-
-        response_text = message.content[0].text
-        logger.info(f"Claude raw response (first 500 chars): {response_text[:500]}")
+        response_text = response.text
+        logger.info(f"Gemini raw response (first 500 chars): {response_text[:500]}")
 
         # Strip markdown fences if present
         if response_text.strip().startswith("```"):
@@ -255,7 +270,6 @@ If no news articles were provided, set "news_article_analysis" to []."""
 
         response_json = json.loads(response_text)
 
-        # Extract findings
         findings = []
         for f in response_json.get("findings", []):
             findings.append({
@@ -270,14 +284,14 @@ If no news articles were provided, set "news_article_analysis" to []."""
         section_analysis = response_json.get("section_analysis", {})
         news_article_analysis = response_json.get("news_article_analysis", [])
 
-        tokens_used = message.usage.input_tokens + message.usage.output_tokens
+        tokens_used = response.usage_metadata.total_token_count if response.usage_metadata else 0
         logger.info(f"Extracted {len(findings)} findings, {len(news_article_analysis)} article scores using {tokens_used} tokens")
 
         return findings, tokens_used, section_analysis, news_article_analysis
 
     except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse Claude response as JSON: {e}")
+        logger.error(f"Failed to parse Gemini response as JSON: {e}")
         return [], 0, {}, []
     except Exception as e:
-        logger.error(f"Claude API error: {type(e).__name__}: {e}")
+        logger.error(f"Gemini API error: {type(e).__name__}: {e}")
         raise RuntimeError(f"LLM call failed: {type(e).__name__}: {e}") from e

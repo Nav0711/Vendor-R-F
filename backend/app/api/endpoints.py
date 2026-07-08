@@ -205,75 +205,81 @@ class SSLCheckAPI:
                 "has_ssl": False
             }
 
-class SandboxAPI:
-    """Implementation for Sandbox.co.in TSP."""
-    def __init__(self):
-        self.api_key = os.getenv("SANDBOX_API_KEY")
-        self.api_secret = os.getenv("SANDBOX_API_SECRET")
-        self.base_url = "https://api.sandbox.co.in"
-        self.access_token = None
-        self.token_expiry = None
+class AuthBridgeAPI:
+    """
+    AuthBridge — Indian KYC/fraud-detection API provider.
 
-    async def _authenticate(self, client: httpx.AsyncClient):
-        """Get or refresh access token."""
-        if not self.api_key or not self.api_secret:
-            raise ValueError("Sandbox API credentials missing")
-            
+    Covers:
+      India identity: GSTIN / PAN / MSME verification
+      Utilities:      Email Verification
+      Fraud Detection: Court Check, Defaulting Director Check, Global Sanctions Check
+
+    Required env vars:
+      AUTHBRIDGE_API_KEY    — your AuthBridge API key
+      AUTHBRIDGE_API_SECRET — your AuthBridge API secret
+      AUTHBRIDGE_BASE_URL   — base URL (confirm with AuthBridge; default below)
+
+    NOTE: endpoint paths below are marked # CONFIRM — verify each against your
+    AuthBridge API documentation before going live.
+    """
+    def __init__(self):
+        self.api_key    = os.getenv("AUTHBRIDGE_API_KEY")
+        self.api_secret = os.getenv("AUTHBRIDGE_API_SECRET")
+        self.base_url   = os.getenv("AUTHBRIDGE_BASE_URL", "https://api.authbridge.ai")
+        self.access_token  = None
+        self.token_expiry  = None
+
+    async def _authenticate(self, client: httpx.AsyncClient) -> str:
+        if not self.api_key:
+            raise ValueError("AUTHBRIDGE_API_KEY not set in .env")
         if self.access_token and self.token_expiry and datetime.utcnow() < self.token_expiry:
             return self.access_token
-
         response = await client.post(
-            f"{self.base_url}/authenticate",
-            headers={
-                "x-api-key": self.api_key,
-                "x-api-secret": self.api_secret,
-                "x-api-version": "1.0"
-            }
+            f"{self.base_url}/v1/token",          # CONFIRM with AuthBridge docs
+            headers={"x-api-key": self.api_key, "x-api-secret": self.api_secret or ""},
         )
         response.raise_for_status()
         data = response.json()
-        self.access_token = data.get("access_token")
-        # Assume 24 hr expiry roughly
+        self.access_token = data.get("access_token") or data.get("token")
         self.token_expiry = datetime.utcnow()
         return self.access_token
 
-    async def _get_auth_headers(self, client: httpx.AsyncClient):
+    async def _headers(self, client: httpx.AsyncClient) -> dict:
         token = await self._authenticate(client)
         return {
             "Authorization": f"Bearer {token}",
             "x-api-key": self.api_key,
-            "x-api-version": "1.0"
+            "Content-Type": "application/json",
         }
 
+    # ── India Identity Verification ───────────────────────────────────────
+
     async def verify_gstin(self, gstin: str) -> dict:
-        """Live/Mock response for GSTIN verification."""
         if not gstin:
             return {"error": "No GSTIN provided"}
-        
         if MOCK_MODE:
             if "INVALID" in gstin.upper():
                 return {"valid": False, "status": "Cancelled", "taxpayer_name": None}
             return {
-                "valid": True,
-                "status": "Active",
+                "valid": True, "status": "Active",
                 "taxpayer_name": "Mocked Taxpayer Pvt Ltd",
-                "registration_date": "2020-01-01",
-                "taxpayer_type": "Regular",
-                "gstin": gstin
+                "registration_date": "2020-01-01", "taxpayer_type": "Regular", "gstin": gstin,
+                "raw_response": {
+                    "tradeNam": "Mocked Taxpayer Pvt Ltd", "lgnm": "Mocked Legal Name Pvt Ltd",
+                    "sts": "Active",
+                    "pradr": {"adr": "123 Mock Street", "dst": "Mumbai", "stcd": "Maharashtra", "pncd": "400001"},
+                },
             }
-
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                headers = await self._get_auth_headers(client)
-                # Note: Sandbox API endpoint structure based on plan
-                response = await client.get(
-                    f"{self.base_url}/gsp/gstin/{gstin}",
-                    headers=headers
+                headers = await self._headers(client)
+                response = await client.post(
+                    f"{self.base_url}/v1/gst/gstin",   # CONFIRM with AuthBridge docs
+                    headers=headers,
+                    json={"gstin": gstin, "consent": "Y"},
                 )
                 response.raise_for_status()
                 data = response.json().get("data", {})
-                
-                # Check status
                 status = data.get("sts", "")
                 return {
                     "valid": status.upper() == "ACTIVE",
@@ -281,92 +287,200 @@ class SandboxAPI:
                     "taxpayer_name": data.get("tradeNam") or data.get("lgnm"),
                     "registration_date": data.get("rgdt"),
                     "gstin": gstin,
-                    "raw_response": data
+                    "raw_response": data,
                 }
         except Exception as e:
-            logger.error(f"Sandbox GSTIN error: {e}")
+            logger.error(f"AuthBridge GSTIN error: {e}")
             return {"error": str(e), "valid": False}
-        
+
     async def verify_pan(self, pan: str) -> dict:
-        """Live/Mock response for PAN verification."""
         if not pan:
             return {"error": "No PAN provided"}
-            
         if MOCK_MODE:
             if "INVALID" in pan.upper():
                 return {"valid": False, "name": None, "status": "Inactive"}
-            return {
-                "valid": True,
-                "status": "Active",
-                "name": "Mocked Taxpayer Pvt Ltd",
-                "pan": pan
-            }
-
+            return {"valid": True, "status": "Active", "name": "Mocked Taxpayer Pvt Ltd", "pan": pan}
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                headers = await self._get_auth_headers(client)
+                headers = await self._headers(client)
                 response = await client.post(
-                    f"{self.base_url}/kyc/pan",
+                    f"{self.base_url}/v1/kyc/pan",     # CONFIRM with AuthBridge docs
                     headers=headers,
-                    json={"pan": pan, "consent": "Y", "reason": "KYB Verification"}
+                    json={"pan": pan, "consent": "Y", "reason": "KYB Due Diligence"},
                 )
                 response.raise_for_status()
                 data = response.json().get("data", {})
-                
                 status = data.get("status", "")
                 return {
-                    "valid": status.upper() == "VALID",
+                    "valid": status.upper() in ("VALID", "ACTIVE"),
                     "status": status,
-                    "name": data.get("full_name"),
+                    "name": data.get("full_name") or data.get("name"),
                     "pan": pan,
-                    "raw_response": data
+                    "raw_response": data,
                 }
         except Exception as e:
-            logger.error(f"Sandbox PAN error: {e}")
+            logger.error(f"AuthBridge PAN error: {e}")
             return {"error": str(e), "valid": False}
-        
+
     async def verify_msmed(self, msmed_num: str) -> dict:
-        """Live/Mock response for MSMED/Udyam verification."""
         if not msmed_num:
             return {"error": "No MSMED number provided"}
-            
         if MOCK_MODE:
             if "INVALID" in msmed_num.upper():
                 return {"valid": False, "enterprise_type": None}
-            return {
-                "valid": True,
-                "enterprise_type": "Micro",
-                "name": "Mocked Taxpayer Pvt Ltd",
-                "msmed_number": msmed_num,
-                "status": "Active"
-            }
-
+            return {"valid": True, "enterprise_type": "Micro", "name": "Mocked Taxpayer Pvt Ltd",
+                    "msmed_number": msmed_num, "status": "Active"}
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                headers = await self._get_auth_headers(client)
-                # MSMED/Udyam is typically at kyc/udyam
+                headers = await self._headers(client)
                 response = await client.post(
-                    f"{self.base_url}/kyc/udyam",
+                    f"{self.base_url}/v1/kyc/msme",    # CONFIRM with AuthBridge docs
                     headers=headers,
-                    json={"udyam_number": msmed_num, "consent": "Y"}
+                    json={"udyam_number": msmed_num, "consent": "Y"},
                 )
                 response.raise_for_status()
                 data = response.json().get("data", {})
-                
                 return {
-                    "valid": True if data else False,
+                    "valid": bool(data),
                     "enterprise_type": data.get("enterprise_type", "Unknown"),
-                    "name": data.get("company_name"),
+                    "name": data.get("enterprise_name") or data.get("company_name"),
                     "district": data.get("district"),
                     "state": data.get("state"),
                     "activity": data.get("major_activity") or data.get("activity"),
                     "msmed_number": msmed_num,
                     "status": "Active" if data else "Inactive",
-                    "raw_response": data
+                    "raw_response": data,
                 }
         except Exception as e:
-            logger.error(f"Sandbox MSMED error: {e}")
+            logger.error(f"AuthBridge MSMED error: {e}")
             return {"error": str(e), "valid": False}
+
+    # ── Utilities ─────────────────────────────────────────────────────────
+
+    async def verify_email(self, email_or_domain: str) -> dict:
+        """Email/domain verification — deliverability, MX records, disposable-domain flag."""
+        if not email_or_domain:
+            return {"error": "No email/domain provided"}
+        if MOCK_MODE:
+            disposable = email_or_domain.lower().split("@")[-1] in (
+                "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "rediffmail.com"
+            )
+            return {
+                "valid": True, "deliverable": not disposable, "disposable": disposable,
+                "mx_records": not disposable, "domain": email_or_domain,
+                "risk": "high" if disposable else "low",
+            }
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                headers = await self._headers(client)
+                response = await client.post(
+                    f"{self.base_url}/v1/utilities/email-verification",  # CONFIRM with AuthBridge docs
+                    headers=headers,
+                    json={"email": email_or_domain, "consent": "Y"},
+                )
+                response.raise_for_status()
+                data = response.json().get("data", {})
+                return {
+                    "valid":       data.get("is_valid", False),
+                    "deliverable": data.get("is_deliverable", False),
+                    "disposable":  data.get("is_disposable", False),
+                    "mx_records":  data.get("has_mx_records", False),
+                    "domain":      email_or_domain,
+                    "risk":        data.get("risk_level", "unknown"),
+                    "raw_response": data,
+                }
+        except Exception as e:
+            logger.error(f"AuthBridge email verification error: {e}")
+            return {"error": str(e)}
+
+    # ── Fraud Detection ───────────────────────────────────────────────────
+
+    async def check_court(self, name: str, entity_type: str = "company") -> dict:
+        """Court Check — litigation/court records in Indian courts for entity or individual."""
+        if not name:
+            return {"error": "No name provided"}
+        if MOCK_MODE:
+            return {"name": name, "entity_type": entity_type, "cases_found": 0, "cases": [], "risk": "low"}
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                headers = await self._headers(client)
+                response = await client.post(
+                    f"{self.base_url}/v1/fraud/court-check",  # CONFIRM with AuthBridge docs
+                    headers=headers,
+                    json={"name": name, "type": entity_type, "consent": "Y"},
+                )
+                response.raise_for_status()
+                data  = response.json().get("data", {})
+                cases = data.get("cases", data.get("court_records", []))
+                return {
+                    "name": name, "entity_type": entity_type,
+                    "cases_found": len(cases), "cases": cases,
+                    "risk": "high" if cases else "low",
+                    "raw_response": data,
+                }
+        except Exception as e:
+            logger.error(f"AuthBridge court check error for '{name}': {e}")
+            return {"error": str(e), "name": name, "cases_found": 0, "cases": []}
+
+    async def check_defaulting_director(self, name: str, din: Optional[str] = None) -> dict:
+        """Defaulting Director Check — MCA database check for disqualified/defaulting directors."""
+        if not name:
+            return {"error": "No name provided"}
+        if MOCK_MODE:
+            return {"name": name, "din": din, "is_defaulter": False,
+                    "disqualification_reason": None, "risk": "low"}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                headers = await self._headers(client)
+                payload = {"name": name, "consent": "Y"}
+                if din:
+                    payload["din"] = din
+                response = await client.post(
+                    f"{self.base_url}/v1/fraud/defaulting-director",  # CONFIRM with AuthBridge docs
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json().get("data", {})
+                is_defaulter = data.get("is_defaulter", False) or data.get("disqualified", False)
+                return {
+                    "name": name, "din": din,
+                    "is_defaulter": is_defaulter,
+                    "disqualification_reason": data.get("reason") or data.get("disqualification_reason"),
+                    "risk": "critical" if is_defaulter else "low",
+                    "raw_response": data,
+                }
+        except Exception as e:
+            logger.error(f"AuthBridge defaulting director error for '{name}': {e}")
+            return {"error": str(e), "name": name, "is_defaulter": False}
+
+    async def check_global_sanctions(self, name: str, entity_type: str = "company") -> dict:
+        """Global Sanctions Check — screens against international sanctions lists via AuthBridge."""
+        if not name:
+            return {"error": "No name provided"}
+        if MOCK_MODE:
+            return {"name": name, "entity_type": entity_type,
+                    "matches": [], "is_sanctioned": False, "risk": "low"}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                headers = await self._headers(client)
+                response = await client.post(
+                    f"{self.base_url}/v1/fraud/global-sanctions",  # CONFIRM with AuthBridge docs
+                    headers=headers,
+                    json={"name": name, "type": entity_type, "consent": "Y"},
+                )
+                response.raise_for_status()
+                data    = response.json().get("data", {})
+                matches = data.get("matches", data.get("sanctions_matches", []))
+                return {
+                    "name": name, "entity_type": entity_type,
+                    "matches": matches, "is_sanctioned": bool(matches),
+                    "risk": "critical" if matches else "low",
+                    "raw_response": data,
+                }
+        except Exception as e:
+            logger.error(f"AuthBridge global sanctions error for '{name}': {e}")
+            return {"error": str(e), "name": name, "matches": [], "is_sanctioned": False}
 
 class SerperAPI:
     def __init__(self):
@@ -547,7 +661,8 @@ opensanctions = OpenSanctionsAPI()
 gdelt = GDELTNewsAPI()
 whois_api = WHOISAPI()
 ssl_api = SSLCheckAPI()
-sandbox_api = SandboxAPI()
+authbridge_api = AuthBridgeAPI()
+sandbox_api = authbridge_api  # legacy alias — internal callers still use sandbox_api
 serper_api = SerperAPI()
 news_api = NewsAPIClient()
 google_places_api = GooglePlacesAPI()

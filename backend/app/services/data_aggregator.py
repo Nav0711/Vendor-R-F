@@ -1,5 +1,6 @@
 from app.api.endpoints import (
-    opencorp, opensanctions, gdelt, whois_api, ssl_api, sandbox_api,
+    opencorp, opensanctions, gdelt, whois_api, ssl_api,
+    authbridge_api, sandbox_api,  # sandbox_api is an alias for authbridge_api
     serper_api, news_api, google_places_api, microlink_api, wikipedia_api
 )
 import asyncio
@@ -33,22 +34,135 @@ async def _gather_gdelt(legal_name, founder_ceo_name, director_names=None):
             news_results[director] = await gdelt.search_news(director)
     return news_results
 
-async def _gather_sandbox(jurisdiction_country, tax_identifier, pan_number, msmed_certificate_number):
-    # Run if jurisdiction is India OR if any Indian identifier was provided
-    # (PAN/GSTIN/MSMED are India-only by definition — don't skip just because jurisdiction wasn't set)
-    is_india = (jurisdiction_country and jurisdiction_country.upper() in ("IN", "IND", "INDIA"))
-    has_indian_id = any([tax_identifier, pan_number, msmed_certificate_number])
-    if not (is_india or has_indian_id):
+async def _gather_authbridge(
+    jurisdiction_country, tax_identifier, pan_number, msmed_certificate_number,
+    legal_name=None, director_names=None, director_din=None,
+    founder_ceo_name=None, corporate_email_domain=None,
+):
+    """
+    Run all AuthBridge checks in parallel:
+    - Universal (any vendor, if key set): email verification, court check,
+      defaulting director, global sanctions
+    - India-specific: GSTIN, PAN, MSME verification
+    """
+    if not authbridge_api.api_key:
         return {}
 
-    tsp_results = {}
-    if tax_identifier:
-        tsp_results["gstin"] = await sandbox_api.verify_gstin(tax_identifier)
-    if pan_number:
-        tsp_results["pan"] = await sandbox_api.verify_pan(pan_number)
-    if msmed_certificate_number:
-        tsp_results["msmed"] = await sandbox_api.verify_msmed(msmed_certificate_number)
-    return tsp_results
+    tasks = []
+    keys  = []
+
+    # ── Universal checks ──────────────────────────────────────────────────
+    if corporate_email_domain:
+        tasks.append(authbridge_api.verify_email(corporate_email_domain))
+        keys.append("email_verification")
+
+    # Court check: entity + each director + founder
+    people = []
+    if legal_name:
+        tasks.append(authbridge_api.check_court(legal_name, entity_type="company"))
+        keys.append(f"court_entity")
+    for i, d in enumerate((director_names or [])[:5]):
+        if d:
+            tasks.append(authbridge_api.check_court(d, entity_type="individual"))
+            keys.append(f"court_dir_{i}")
+            people.append((i, d))
+    if founder_ceo_name:
+        tasks.append(authbridge_api.check_court(founder_ceo_name, entity_type="individual"))
+        keys.append("court_founder")
+
+    # Defaulting director: each director + founder
+    for i, d in enumerate((director_names or [])[:5]):
+        if d:
+            din = (director_din or [])[i] if director_din and i < len(director_din) else None
+            tasks.append(authbridge_api.check_defaulting_director(d, din=din))
+            keys.append(f"default_dir_{i}")
+    if founder_ceo_name:
+        tasks.append(authbridge_api.check_defaulting_director(founder_ceo_name))
+        keys.append("default_founder")
+
+    # Global sanctions: entity + each director + founder
+    if legal_name:
+        tasks.append(authbridge_api.check_global_sanctions(legal_name, entity_type="company"))
+        keys.append("sanctions_entity")
+    for i, d in enumerate((director_names or [])[:5]):
+        if d:
+            tasks.append(authbridge_api.check_global_sanctions(d, entity_type="individual"))
+            keys.append(f"sanctions_dir_{i}")
+    if founder_ceo_name:
+        tasks.append(authbridge_api.check_global_sanctions(founder_ceo_name, entity_type="individual"))
+        keys.append("sanctions_founder")
+
+    # ── India-specific checks ─────────────────────────────────────────────
+    is_india     = jurisdiction_country and jurisdiction_country.upper() in ("IN", "IND", "INDIA")
+    has_india_id = any([tax_identifier, pan_number, msmed_certificate_number])
+    if is_india or has_india_id:
+        if tax_identifier:
+            tasks.append(authbridge_api.verify_gstin(tax_identifier))
+            keys.append("gstin")
+        if pan_number:
+            tasks.append(authbridge_api.verify_pan(pan_number))
+            keys.append("pan")
+        if msmed_certificate_number:
+            tasks.append(authbridge_api.verify_msmed(msmed_certificate_number))
+            keys.append("msmed")
+
+    if not tasks:
+        return {}
+
+    settled = await asyncio.gather(*tasks, return_exceptions=True)
+    raw = {k: (v if not isinstance(v, Exception) else {"error": str(v)})
+           for k, v in zip(keys, settled)}
+
+    result = {}
+
+    # Email
+    if "email_verification" in raw:
+        result["email_verification"] = raw["email_verification"]
+
+    # Court check — group into {entity_name: result}
+    court = {}
+    if "court_entity" in raw and legal_name:
+        court[legal_name] = raw["court_entity"]
+    for i, d in enumerate((director_names or [])[:5]):
+        if d and f"court_dir_{i}" in raw:
+            court[d] = raw[f"court_dir_{i}"]
+    if founder_ceo_name and "court_founder" in raw:
+        court[founder_ceo_name] = raw["court_founder"]
+    if court:
+        result["court_check"] = court
+
+    # Defaulting director — group into {director_name: result}
+    defaulting = {}
+    for i, d in enumerate((director_names or [])[:5]):
+        if d and f"default_dir_{i}" in raw:
+            defaulting[d] = raw[f"default_dir_{i}"]
+    if founder_ceo_name and "default_founder" in raw:
+        defaulting[founder_ceo_name] = raw["default_founder"]
+    if defaulting:
+        result["defaulting_director"] = defaulting
+
+    # Global sanctions — group into {name: result}
+    sanctions_ab = {}
+    if "sanctions_entity" in raw and legal_name:
+        sanctions_ab[legal_name] = raw["sanctions_entity"]
+    for i, d in enumerate((director_names or [])[:5]):
+        if d and f"sanctions_dir_{i}" in raw:
+            sanctions_ab[d] = raw[f"sanctions_dir_{i}"]
+    if founder_ceo_name and "sanctions_founder" in raw:
+        sanctions_ab[founder_ceo_name] = raw["sanctions_founder"]
+    if sanctions_ab:
+        result["global_sanctions"] = sanctions_ab
+
+    # India IDs
+    for k in ("gstin", "pan", "msmed"):
+        if k in raw:
+            result[k] = raw[k]
+
+    return result
+
+
+# Keep old name as alias so Phase 2 references still compile
+_gather_sandbox = _gather_authbridge
 
 async def _async_return(val):
     return val
@@ -211,7 +325,8 @@ async def aggregate_vendor_data(
     msmed_certificate_number: Optional[str] = None,
     city: Optional[str] = None,
     registered_address: Optional[str] = None,
-    social_handles: Optional[dict] = None
+    social_handles: Optional[dict] = None,
+    corporate_email_domain: Optional[str] = None,
 ) -> dict:
     """
     Two-phase vendor intelligence aggregation.
@@ -276,25 +391,34 @@ async def aggregate_vendor_data(
         address_query = f"{legal_name} {jurisdiction_country or ''}".strip()
     tasks.append(_safe_call("google_places", google_places_api.search_address(address_query)))
 
-    tasks.append(_safe_call("sandbox_tsp", _gather_sandbox(
-        jurisdiction_country, tax_identifier, pan_number, msmed_certificate_number
+    tasks.append(_safe_call("authbridge_tsp", _gather_authbridge(
+        jurisdiction_country, tax_identifier, pan_number, msmed_certificate_number,
+        legal_name=legal_name,
+        director_names=director_names,
+        director_din=director_din,
+        founder_ceo_name=founder_ceo_name,
+        corporate_email_domain=corporate_email_domain,
     )))
 
     results_phase1 = await asyncio.gather(*tasks)
     aggregated = {k: v for k, v in results_phase1}
 
-    # ── Phase 2: sandbox-driven enrichment (India only) ───────────────────
-    sandbox_results = aggregated.get("sandbox_tsp", {})
-    if sandbox_results and isinstance(sandbox_results, dict) and not sandbox_results.get("error"):
-        intel = _extract_sandbox_intel(sandbox_results, legal_name)
+    # ── Phase 2: AuthBridge-driven alternate-name enrichment (India only) ─
+    ab_results = aggregated.get("authbridge_tsp", {})
+    # Also keep sandbox_tsp key for backwards compat with main.py / LLM prompt
+    aggregated["sandbox_tsp"] = ab_results
+    if ab_results and isinstance(ab_results, dict) and not ab_results.get("error"):
+        intel = _extract_sandbox_intel(ab_results, legal_name)
         aggregated["sandbox_intel"] = intel
+        aggregated["authbridge_intel"] = intel
 
         if intel["additional_names"] or intel["registered_address"]:
             logger.info(
-                f"Phase 2 enrichment: {len(intel['additional_names'])} alternate name(s) found — "
+                f"Phase 2 enrichment: {len(intel['additional_names'])} alternate name(s) — "
                 f"{intel['additional_names']}"
             )
             enrichment = await _enrich_from_sandbox_intel(intel, legal_name)
             aggregated["sandbox_enrichment"] = enrichment
+            aggregated["authbridge_enrichment"] = enrichment
 
     return aggregated
