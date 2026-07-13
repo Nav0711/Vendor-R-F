@@ -1,16 +1,23 @@
-import { Landmark, ShieldAlert, Globe, MapPin, FileText, CheckCircle2 } from 'lucide-react';
-import Row from './Row';
+import { Landmark, ShieldAlert, Globe, MapPin, FileText } from 'lucide-react';
+import Row, { OkBadge } from './Row';
 import Section from './Section';
 import SectionInsight from './SectionInsight';
 
 const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
   const sa = report.section_analysis ?? {};
+  const aiUnavailable = !!(report.section_analysis?._ai_unavailable);
+
+  const Insight = ({ sectionKey }: { sectionKey: string }) =>
+    aiUnavailable
+      ? <SectionInsight unavailable />
+      : sa[sectionKey] ? <SectionInsight {...sa[sectionKey]} /> : null;
+
   return (
     <div className="space-y-4 animate-in fade-in duration-200">
 
       {/* Corporate Registry */}
       <Section title="Corporate Registry" icon={<Landmark className="w-4 h-4" />}>
-        {sa.corporate_registry && <SectionInsight {...sa.corporate_registry} />}
+        <Insight sectionKey="corporate_registry" />
         {(ss.opencorporates?.length ?? 0) > 0 ? ss.opencorporates.map((c: any, i: number) => (
           <div key={i}>
             <Row label="Company"       value={c.name}
@@ -40,7 +47,7 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
 
       {/* Sanctions & Watchlists */}
       <Section title="Sanctions & Watchlists" icon={<ShieldAlert className="w-4 h-4" />}>
-        {sa.sanctions_watchlists && <SectionInsight {...sa.sanctions_watchlists} />}
+        <Insight sectionKey="sanctions_watchlists" />
         {ss.opensanctions?.some((s: any) => s.caption) ? (
           ss.opensanctions.filter((s: any) => s.caption).map((s: any, i: number) => (
             <div key={i}>
@@ -53,17 +60,13 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
             </div>
           ))
         ) : (
-          <Row label="Status" value={
-            <span className="text-emerald-600 flex items-center gap-1 font-medium text-xs">
-              <CheckCircle2 className="w-3.5 h-3.5" /> No watchlist matches
-            </span>
-          } />
+          <Row label="Status" value={<OkBadge msg="No watchlist matches" />} />
         )}
       </Section>
 
       {/* Domain & SSL */}
       <Section title="Domain & SSL" icon={<Globe className="w-4 h-4" />}>
-        {sa.domain_ssl && <SectionInsight {...sa.domain_ssl} />}
+        <Insight sectionKey="domain_ssl" />
         {ss.whois && (
           <>
             <Row label="Domain"    value={Array.isArray(ss.whois.domain_name) ? ss.whois.domain_name[0] : ss.whois.domain_name}
@@ -97,7 +100,7 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
 
       {/* Physical Address */}
       <Section title="Physical Address" icon={<MapPin className="w-4 h-4" />}>
-        {sa.physical_address && <SectionInsight {...sa.physical_address} />}
+        <Insight sectionKey="physical_address" />
         {(ss.google_places?.length ?? 0) > 0 ? ss.google_places.map((p: any, i: number) => (
           <div key={i}>
             <Row label="Name"    value={p.name} />
@@ -123,7 +126,7 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
       {/* Wikipedia */}
       {ss.wikipedia?.found && (
         <Section title="Wikipedia" icon={<FileText className="w-4 h-4" />}>
-          {sa.wikipedia && <SectionInsight {...sa.wikipedia} />}
+          <Insight sectionKey="wikipedia" />
           <Row label="Article"     value={ss.wikipedia.title}
             link={ss.wikipedia.page_url} linkLabel="Wikipedia" />
           {ss.wikipedia.description && <Row label="Description" value={ss.wikipedia.description} />}

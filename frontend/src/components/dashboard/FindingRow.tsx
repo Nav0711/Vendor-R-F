@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 import { getRisk } from './utils';
 
 const FindingRow = ({ finding }: { finding: any }) => {
@@ -27,8 +27,14 @@ const FindingRow = ({ finding }: { finding: any }) => {
           : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
       </div>
       {open && (
-        <div className="mx-4 mb-2.5 px-3 py-2 bg-muted/30 rounded-lg border text-xs text-muted-foreground leading-relaxed">
-          {finding.detail}
+        <div className="mx-4 mb-2.5 px-3 py-2 bg-muted/30 rounded-lg border text-xs text-muted-foreground leading-relaxed space-y-2">
+          <p>{finding.detail}</p>
+          {finding.evidence?.source_url && (
+            <a href={finding.evidence.source_url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1 text-primary hover:underline font-medium w-fit">
+              <ExternalLink className="w-3 h-3" /> View source
+            </a>
+          )}
         </div>
       )}
     </div>

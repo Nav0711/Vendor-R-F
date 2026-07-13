@@ -5,7 +5,6 @@ pydantic
 python-dotenv
 httpx
 google-genai
-pydantic-settings
 pytest
 pymysql
 cryptography

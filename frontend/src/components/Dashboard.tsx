@@ -11,23 +11,20 @@ import WebTab from './dashboard/WebTab';
 import IndiaTab from './dashboard/IndiaTab';
 import ScanLoading from './dashboard/ScanLoading';
 
-const Dashboard = () => {
-  const { scanId } = useParams();
-  const navigate = useNavigate();
-  const [status, setStatus]   = useState('PENDING');
-  const [report, setReport]   = useState<any>(null);
-  const [tab, setTab]         = useState<TabKey>('overview');
-
+const useScanReport = (scanId?: string) => {
+  const [status, setStatus] = useState('PENDING');
+  const [report, setReport] = useState<any>(null);
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
     const TERMINAL = ['COMPLETED', 'ERROR'];
+    let stopped = false;
     const check = async () => {
+      if (stopped) return;
       try {
         const res = await axios.get(`http://localhost:8000/scan/${scanId}/status`);
         const s = res.data.status;
         setStatus(s);
         if (TERMINAL.includes(s)) {
-          clearInterval(interval);
+          stopped = true;
           if (s === 'COMPLETED') {
             const rep = await axios.get(`http://localhost:8000/scan/${scanId}/report`);
             setReport(rep.data);
@@ -36,9 +33,17 @@ const Dashboard = () => {
       } catch (err) { console.error(err); }
     };
     check();
-    if (!TERMINAL.includes(status)) interval = setInterval(check, 3000);
-    return () => clearInterval(interval);
-  }, [scanId, status]);
+    const id = setInterval(check, 3000);
+    return () => { stopped = true; clearInterval(id); };
+  }, [scanId]);
+  return { status, report };
+};
+
+const Dashboard = () => {
+  const { scanId } = useParams();
+  const navigate = useNavigate();
+  const { status, report } = useScanReport(scanId);
+  const [tab, setTab] = useState<TabKey>('overview');
 
   // ── Error state ────────────────────────────────────────────────────────────
   if (status === 'ERROR') {
@@ -71,6 +76,7 @@ const Dashboard = () => {
   const riskLevel     = report.risk_summary?.overall_risk_level ?? 'UNKNOWN';
   const riskStyles    = getRisk(riskLevel);
   const findingsCount = report.adverse_findings?.length ?? 0;
+  const isMock        = report.data_mode === 'mock';
   const hasAuthBridge = !!(ss.authbridge_tsp || ss.authbridge_intel || ss.sandbox_tsp || ss.sandbox_intel);
 
   // Use backend-combined list (with AI insight) if available; fall back to client-side aggregation
@@ -128,21 +134,29 @@ const Dashboard = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          {/* Mock / Live data source indicator */}
+          {isMock ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-amber-300 bg-amber-50 text-amber-700 text-xs font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              MOCK DATA
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 text-xs font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              LIVE DATA
+            </div>
+          )}
+
           <div className={`px-3 py-1.5 rounded-lg border font-bold text-sm flex items-center gap-2 ${riskStyles.badge}`}>
             <div className={`w-2 h-2 rounded-full animate-pulse ${riskStyles.dot}`} />
             {riskLevel} RISK
           </div>
-          {[
-            { label: 'Findings',    value: findingsCount },
-            { label: 'Tokens Used', value: (report.tokens_used      ?? 0).toLocaleString() },
-            { label: 'Balance',     value: (report.tokens_remaining  ?? 0).toLocaleString() },
-          ].map(s => (
-            <div key={s.label} className="text-center hidden sm:block">
-              <div className="text-base font-bold text-foreground">{s.value}</div>
-              <div className="text-[10px] text-muted-foreground uppercase tracking-wider">{s.label}</div>
-            </div>
-          ))}
+
+          <div className="text-center hidden sm:block">
+            <div className="text-base font-bold text-foreground">{findingsCount}</div>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Findings</div>
+          </div>
         </div>
       </div>
 

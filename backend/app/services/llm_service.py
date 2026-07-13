@@ -29,7 +29,47 @@ _CLEAN_ARTICLE_ANALYSIS = [
     {"index": 1, "summary": "General regulatory compliance article; no company-specific issues mentioned.", "relevance": 50, "criticality": 10},
 ]
 
-async def extract_findings_from_data(aggregated_data: dict, news_flat_list: list) -> tuple[list, int, dict, list]:
+# ── Token optimisation ────────────────────────────────────────────────────────
+# Gemini's free tier is billed on input tokens per request. The raw aggregated
+# payload is huge: it carries verbose `raw_response` blobs, duplicate alias keys
+# (sandbox_* mirror authbridge_*), and full news arrays that are ALSO sent in the
+# flattened news index. We strip all of that before serialising so a single scan
+# spends a fraction of the tokens.
+
+# Heavy keys whose values are large verbatim API dumps not needed for analysis.
+_DROP_KEYS = {"raw_response", "raw", "html", "content", "body", "_raw"}
+# Alias keys that duplicate an authbridge_* key byte-for-byte.
+_ALIAS_KEYS = {"sandbox_tsp", "sandbox_intel", "sandbox_enrichment"}
+# News sources already represented (title + url + source) in the flat news index.
+_NEWS_KEYS_IN_FLAT = {"gdelt", "newsapi", "newsapi_regulatory", "serper_news"}
+
+
+def _compact(obj, max_list: int = 5, max_str: int = 240):
+    """Recursively cap list lengths, truncate long strings, and drop heavy keys."""
+    if isinstance(obj, dict):
+        return {
+            k: _compact(v, max_list, max_str)
+            for k, v in obj.items() if k not in _DROP_KEYS
+        }
+    if isinstance(obj, list):
+        return [_compact(x, max_list, max_str) for x in obj[:max_list]]
+    if isinstance(obj, str) and len(obj) > max_str:
+        return obj[:max_str] + "…"
+    return obj
+
+
+def _slim_data_for_llm(data: dict) -> dict:
+    """Produce a compact copy of the aggregated data for the LLM prompt."""
+    return {
+        k: _compact(v)
+        for k, v in data.items()
+        if k not in _ALIAS_KEYS and k not in _NEWS_KEYS_IN_FLAT
+    }
+
+
+async def extract_findings_from_data(
+    aggregated_data: dict, news_flat_list: list, category: str | None = None
+) -> tuple[list, int, dict, list]:
     """
     Send aggregated API data to Gemini and extract adverse findings, section-level analysis,
     and per-article news analysis.
@@ -118,8 +158,25 @@ async def extract_findings_from_data(aggregated_data: dict, news_flat_list: list
         lines = [f"  [{item['index']}] [{item['source']}] {item['title']} — {item['url']}" for item in news_flat_list]
         news_index_block = "\n## Flattened News Article Index (for news_article_analysis):\n" + "\n".join(lines)
 
+    category_block = ""
+    if category:
+        category_block = f"""
+## Vendor Business Category: {category}
+This vendor operates in the "{category}" sector. Use this to keep the analysis focused:
+- Prioritise sources, reviews, and articles that plausibly concern a company in this sector.
+- AGGRESSIVELY discard name-collision noise: search results, news, or sanctions/registry
+  hits that clearly belong to a DIFFERENT industry or an unrelated same-named entity are NOT
+  about this vendor. Give such articles relevance < 20 in news_article_analysis and do NOT
+  raise findings from them.
+- Only surface findings supported by evidence that genuinely relates to a "{category}" business.
+"""
+
+    # Compact the payload before serialising — this is the primary token saver.
+    slim_data = _slim_data_for_llm(aggregated_data)
+
     prompt = f"""You are a KYB (Know Your Business) due diligence analyst.
 Analyze the provided data and return a structured JSON object with three keys: findings, section_analysis, and news_article_analysis.
+{category_block}
 
 ## Data Sources in this payload:
 - opencorporates: Company registry lookup
@@ -147,8 +204,8 @@ Analyze the provided data and return a structured JSON object with three keys: f
 - authbridge_enrichment.gstin_address_places: Google Places result using the GSTIN-verified registered address
 {news_index_block}
 
-## Aggregated Data:
-{json.dumps(aggregated_data, indent=2)}
+## Aggregated Data (compacted — long fields truncated, lists capped):
+{json.dumps(slim_data, separators=(",", ":"))}
 
 ## Task:
 Return a single JSON object with exactly these three keys:
@@ -157,14 +214,15 @@ Return a single JSON object with exactly these three keys:
 For EACH adverse finding include:
 - finding_type: (sanctions_match | news_adverse | regulatory_issue | pep_match | domain_risk | address_risk | review_risk | name_mismatch | other)
 - severity: (critical | high | medium | low)
-- title: short summary
-- description: detailed explanation citing specific source fields and values
-- source_api: the key from the data above that contains the evidence
+- title: concise headline (max 80 chars) that names the specific risk
+- description: detailed 3–5 sentence explanation. Quote specific field values from the data: exact entity names, article headlines, court case counts, sanction list names, dates, GSTIN status values, confidence scores. State WHAT was found, in WHICH data source, and WHY it constitutes a risk signal.
+- source_api: the key from the data above that contains the primary evidence
+- source_url: the single most direct URL from the raw data supporting this finding (from an article, OpenSanctions entity page, OpenCorporates record, etc.). Use empty string if none available.
 - confidence_score: 0.0 to 1.0
 
 ### 2. "section_analysis" — dict with one entry per section below
 For each section provide:
-- summary: single sentence describing what the data reveals about this vendor (max 120 chars)
+- summary: 1–2 sentences citing specific evidence values found in the data. Name actual field values: registration date, domain age, article count, rating score, specific sanction list, court case count, GSTIN status. Be factual and precise, not generic. Max 250 chars.
 - relevance: integer 0–100 — how significant/informative this data source is for the risk assessment
 - criticality: integer 0–100 — how concerning/risky the content is (0 = clean/positive, 100 = severe red flag)
 
@@ -229,7 +287,7 @@ For each article (referenced by its [index]):
 Return ONLY a valid JSON object. No preamble, no markdown fences. Example structure:
 {{
   "findings": [
-    {{"finding_type": "sanctions_match", "severity": "critical", "title": "...", "description": "...", "source_api": "opensanctions", "confidence_score": 0.95}}
+    {{"finding_type": "sanctions_match", "severity": "critical", "title": "...", "description": "...", "source_api": "opensanctions", "source_url": "https://www.opensanctions.org/entities/...", "confidence_score": 0.95}}
   ],
   "section_analysis": {{
     "corporate_registry": {{"summary": "Active registration with no anomalies.", "relevance": 80, "criticality": 10}},
@@ -257,6 +315,11 @@ If no news articles were provided, set "news_article_analysis" to []."""
         response = await client.aio.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt,
+            config=genai.types.GenerateContentConfig(
+                temperature=0.2,
+                max_output_tokens=4096,
+                response_mime_type="application/json",
+            ),
         )
         response_text = response.text
         logger.info(f"Gemini raw response (first 500 chars): {response_text[:500]}")
@@ -273,11 +336,12 @@ If no news articles were provided, set "news_article_analysis" to []."""
         findings = []
         for f in response_json.get("findings", []):
             findings.append({
-                "finding_type": f.get("finding_type"),
-                "severity": f.get("severity", "low").lower(),
-                "title": f.get("title"),
-                "description": f.get("description"),
-                "source_api": f.get("source_api"),
+                "finding_type":   f.get("finding_type"),
+                "severity":       f.get("severity", "low").lower(),
+                "title":          f.get("title"),
+                "description":    f.get("description"),
+                "source_api":     f.get("source_api"),
+                "source_url":     f.get("source_url", ""),
                 "confidence_score": float(f.get("confidence_score", 0.0))
             })
 
@@ -291,7 +355,7 @@ If no news articles were provided, set "news_article_analysis" to []."""
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse Gemini response as JSON: {e}")
-        return [], 0, {}, []
+        return [], 0, {"_ai_unavailable": True}, []
     except Exception as e:
         logger.error(f"Gemini API error: {type(e).__name__}: {e}")
-        raise RuntimeError(f"LLM call failed: {type(e).__name__}: {e}") from e
+        return [], 0, {"_ai_unavailable": True}, []

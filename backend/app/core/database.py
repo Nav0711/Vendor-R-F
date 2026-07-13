@@ -1,14 +1,15 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from app.core.models import Base
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
-import os
 from pathlib import Path
+import logging
+import os
+
+logger = logging.getLogger(__name__)
 
 # Load .env from the backend/ root (3 levels up from app/core/)
-env_path = Path(__file__).resolve().parent.parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent.parent / ".env")
 
 # ── MySQL connection ──────────────────────────────────────────────────────────
 # VendorLens uses MySQL. A full DATABASE_URL (if set) takes precedence; otherwise
@@ -26,11 +27,11 @@ if not DATABASE_URL:
         f"@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4"
     )
 
-print(f"Connecting to MySQL at {os.getenv('MYSQL_HOST', '127.0.0.1')}:{os.getenv('MYSQL_PORT', '3306')}")
+logger.info("Connecting to MySQL at %s:%s", os.getenv("MYSQL_HOST", "127.0.0.1"), os.getenv("MYSQL_PORT", "3306"))
 
 engine = create_engine(
     DATABASE_URL,
-    echo=True,
+    echo=os.getenv("LOG_LEVEL", "INFO").upper() == "DEBUG",
     pool_pre_ping=True,   # transparently recycle stale MySQL connections
     pool_recycle=3600,    # avoid MySQL's default 8h "server has gone away" timeout
 )
@@ -43,7 +44,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-if __name__ == "__main__":
-    Base.metadata.create_all(bind=engine)
-    print("Database tables created!")

@@ -8,6 +8,7 @@ const EMPTY_FORM = {
   website_domain: '',
   registration_number: '',
   jurisdiction_country: '',
+  category: '',
   tax_identifier: '',
   registered_address: '',
   director_names: '',
@@ -40,6 +41,13 @@ const Field = ({
       onChange={e => onChange(e.target.value)}
       className="flex h-8 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
     />
+  </div>
+);
+
+const FormSection = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <div>
+    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">{label}</p>
+    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">{children}</div>
   </div>
 );
 
@@ -108,7 +116,7 @@ const IntakeForm = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
     setErrorMsg(null);
@@ -244,41 +252,30 @@ const IntakeForm = () => {
           <Field label="Website Domain" value={formData.website_domain} onChange={set('website_domain')} placeholder="example.com" />
           <Field label="Registration / BP No." value={formData.registration_number} onChange={set('registration_number')} />
           <Field label="Jurisdiction (ISO)" value={formData.jurisdiction_country} onChange={set('jurisdiction_country')} placeholder="US, IN, GB" />
+          <Field label="Category / Sector" value={formData.category} onChange={set('category')} placeholder="Logistics, FinTech, Pharma" />
           <Field label="Registered Address" value={formData.registered_address} onChange={set('registered_address')} />
           <Field label="City" value={formData.city} onChange={set('city')} />
         </div>
 
-        {/* India-specific */}
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">India Identifiers</p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <Field label="GSTIN" value={formData.tax_identifier} onChange={set('tax_identifier')} />
-            <Field label="PAN Number" value={formData.pan_number} onChange={set('pan_number')} />
-            <Field label="MSMED Cert. No." value={formData.msmed_certificate_number} onChange={set('msmed_certificate_number')} />
-          </div>
-        </div>
+        <FormSection label="India Identifiers">
+          <Field label="GSTIN" value={formData.tax_identifier} onChange={set('tax_identifier')} />
+          <Field label="PAN Number" value={formData.pan_number} onChange={set('pan_number')} />
+          <Field label="MSMED Cert. No." value={formData.msmed_certificate_number} onChange={set('msmed_certificate_number')} />
+        </FormSection>
 
-        {/* People */}
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">People</p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <Field label="Director Names (;-sep)" value={formData.director_names} onChange={set('director_names')} placeholder="Alice; Bob" />
-            <Field label="Director DIN (;-sep)" value={formData.director_din} onChange={set('director_din')} placeholder="00000001; 00000002" />
-            <Field label="Founder / CEO" value={formData.founder_ceo_name} onChange={set('founder_ceo_name')} />
-          </div>
-        </div>
+        <FormSection label="People">
+          <Field label="Director Names (;-sep)" value={formData.director_names} onChange={set('director_names')} placeholder="Alice; Bob" />
+          <Field label="Director DIN (;-sep)" value={formData.director_din} onChange={set('director_din')} placeholder="00000001; 00000002" />
+          <Field label="Founder / CEO" value={formData.founder_ceo_name} onChange={set('founder_ceo_name')} />
+        </FormSection>
 
-        {/* Contact & Social */}
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Contact &amp; Social</p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <Field label="Corporate Email Domain" value={formData.corporate_email_domain} onChange={set('corporate_email_domain')} placeholder="corp.com" />
-            <Field label="Mobile Number" value={formData.mobile_number} onChange={set('mobile_number')} />
-            <Field label="LinkedIn Handle" value={formData.linkedin_handle} onChange={set('linkedin_handle')} />
-            <Field label="Twitter Handle" value={formData.twitter_handle} onChange={set('twitter_handle')} />
-            <Field label="Facebook Handle" value={formData.facebook_handle} onChange={set('facebook_handle')} />
-          </div>
-        </div>
+        <FormSection label="Contact &amp; Social">
+          <Field label="Corporate Email Domain" value={formData.corporate_email_domain} onChange={set('corporate_email_domain')} placeholder="corp.com" />
+          <Field label="Mobile Number" value={formData.mobile_number} onChange={set('mobile_number')} />
+          <Field label="LinkedIn Handle" value={formData.linkedin_handle} onChange={set('linkedin_handle')} />
+          <Field label="Twitter Handle" value={formData.twitter_handle} onChange={set('twitter_handle')} />
+          <Field label="Facebook Handle" value={formData.facebook_handle} onChange={set('facebook_handle')} />
+        </FormSection>
 
         {/* Error */}
         {errorMsg && (

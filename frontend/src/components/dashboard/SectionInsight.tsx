@@ -12,19 +12,29 @@ const ScoreBar = ({ label, score }: { label: string; score: number }) => (
 );
 
 const SectionInsight = ({
-  summary, relevance, criticality,
+  summary, relevance, criticality, unavailable,
 }: {
-  summary: string; relevance: number; criticality: number;
-}) => (
-  <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 px-4 py-2.5 bg-primary/5 border-b">
-    <span className="text-xs text-foreground/80 flex-1 italic leading-snug">
-      <span className="text-primary font-bold mr-1.5">◆</span>{summary}
-    </span>
-    <div className="flex flex-col gap-1 shrink-0">
-      <ScoreBar label="Relevance"   score={relevance} />
-      <ScoreBar label="Criticality" score={criticality} />
+  summary?: string; relevance?: number; criticality?: number; unavailable?: boolean;
+}) => {
+  if (unavailable) {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 border-b text-xs text-muted-foreground/60 italic bg-muted/20">
+        <span className="text-muted-foreground/30 font-bold">◆</span>
+        AI analysis unavailable — quota exhausted or API key not configured
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 px-4 py-2.5 bg-primary/5 border-b">
+      <span className="text-xs text-foreground/80 flex-1 italic leading-snug">
+        <span className="text-primary font-bold mr-1.5">◆</span>{summary}
+      </span>
+      <div className="flex flex-col gap-1 shrink-0">
+        <ScoreBar label="Relevance"   score={relevance!} />
+        <ScoreBar label="Criticality" score={criticality!} />
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 export default SectionInsight;

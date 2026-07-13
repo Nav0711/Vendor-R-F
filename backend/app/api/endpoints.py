@@ -10,6 +10,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 MOCK_MODE = os.getenv("MOCK_API_CALLS", "false").lower() == "true" or os.getenv("TEST_MODE", "false").lower() == "true"
 
+_TIMEOUT      = 15.0  # default request timeout for all API clients
+_TIMEOUT_LONG = 20.0  # used for court-check (slower endpoint)
+
 class OpenCorporatesAPI:
     def __init__(self):
         self.api_key = os.getenv("OPENCORPORATES_API_KEY")
@@ -21,18 +24,12 @@ class OpenCorporatesAPI:
             return {"mocked": True, "data": {}}
         
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 response = await client.get(
                     f"{self.base_url}/companies/search",
-                    params={
-                        "q": name,
-                        "jurisdiction": jurisdiction,
-                        "api_token": self.api_key
-                    }
+                    params={"q": name, "jurisdiction": jurisdiction, "api_token": self.api_key}
                 )
-                if response.status_code == 401 or response.status_code == 403:
-                    # If unauthorized or forbidden due to invalid key, return a mocked response 
-                    # so the prototype can still function for demonstration
+                if response.status_code in (401, 403):
                     return {"mocked_due_to_auth_error": True, "error": f"API Key Issue ({response.status_code})"}
                 response.raise_for_status()
                 data = response.json()
@@ -40,13 +37,13 @@ class OpenCorporatesAPI:
                 return {
                     "companies": [
                         {
-                            "name": c.get("company", {}).get("name"),
-                            "company_number": c.get("company", {}).get("company_number"),
-                            "jurisdiction_code": c.get("company", {}).get("jurisdiction_code"),
-                            "incorporation_date": c.get("company", {}).get("incorporation_date"),
-                            "dissolution_date": c.get("company", {}).get("dissolution_date"),
-                            "company_type": c.get("company", {}).get("company_type"),
-                            "current_status": c.get("company", {}).get("current_status")
+                            "name":             (co := c.get("company", {})).get("name"),
+                            "company_number":   co.get("company_number"),
+                            "jurisdiction_code":co.get("jurisdiction_code"),
+                            "incorporation_date":co.get("incorporation_date"),
+                            "dissolution_date": co.get("dissolution_date"),
+                            "company_type":     co.get("company_type"),
+                            "current_status":   co.get("current_status"),
                         }
                         for c in results
                     ]
@@ -67,14 +64,14 @@ class OpenSanctionsAPI:
             return {"mocked": True, "data": {}}
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 headers = {"Accept": "application/json"}
                 if self.api_key:
                     headers["Authorization"] = f"ApiKey {self.api_key}"
                 response = await client.get(
                     f"{self.base_url}/search/default",
                     params={"q": name, "fuzzy": "true", "limit": 10},
-                    headers=headers
+                    headers=headers,
                 )
                 if response.status_code in (401, 403):
                     return {"mocked_due_to_auth_error": True, "error": f"API Key Issue ({response.status_code})"}
@@ -87,14 +84,14 @@ class OpenSanctionsAPI:
                 return {
                     "results": [
                         {
-                            "id": item.get("id"),
+                            "id":      item.get("id"),
                             "caption": item.get("caption"),
-                            "schema": item.get("schema"),
+                            "schema":  item.get("schema"),
                             "properties": {
-                                "name": item.get("properties", {}).get("name"),
-                                "country": item.get("properties", {}).get("country"),
-                                "status": item.get("properties", {}).get("status")
-                            }
+                                "name":    (props := item.get("properties", {})).get("name"),
+                                "country": props.get("country"),
+                                "status":  props.get("status"),
+                            },
                         }
                         for item in results
                     ]
@@ -112,7 +109,7 @@ class GDELTNewsAPI:
         
         try:
             # GDELT has free API at: api.gdeltproject.org
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 response = await client.get(
                     "https://api.gdeltproject.org/api/v2/search/web",
                     params={
@@ -271,7 +268,7 @@ class AuthBridgeAPI:
                 },
             }
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 headers = await self._headers(client)
                 response = await client.post(
                     f"{self.base_url}/v1/gst/gstin",   # CONFIRM with AuthBridge docs
@@ -301,7 +298,7 @@ class AuthBridgeAPI:
                 return {"valid": False, "name": None, "status": "Inactive"}
             return {"valid": True, "status": "Active", "name": "Mocked Taxpayer Pvt Ltd", "pan": pan}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 headers = await self._headers(client)
                 response = await client.post(
                     f"{self.base_url}/v1/kyc/pan",     # CONFIRM with AuthBridge docs
@@ -331,7 +328,7 @@ class AuthBridgeAPI:
             return {"valid": True, "enterprise_type": "Micro", "name": "Mocked Taxpayer Pvt Ltd",
                     "msmed_number": msmed_num, "status": "Active"}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 headers = await self._headers(client)
                 response = await client.post(
                     f"{self.base_url}/v1/kyc/msme",    # CONFIRM with AuthBridge docs
@@ -371,7 +368,7 @@ class AuthBridgeAPI:
                 "risk": "high" if disposable else "low",
             }
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 headers = await self._headers(client)
                 response = await client.post(
                     f"{self.base_url}/v1/utilities/email-verification",  # CONFIRM with AuthBridge docs
@@ -402,7 +399,7 @@ class AuthBridgeAPI:
         if MOCK_MODE:
             return {"name": name, "entity_type": entity_type, "cases_found": 0, "cases": [], "risk": "low"}
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT_LONG) as client:
                 headers = await self._headers(client)
                 response = await client.post(
                     f"{self.base_url}/v1/fraud/court-check",  # CONFIRM with AuthBridge docs
@@ -430,7 +427,7 @@ class AuthBridgeAPI:
             return {"name": name, "din": din, "is_defaulter": False,
                     "disqualification_reason": None, "risk": "low"}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 headers = await self._headers(client)
                 payload = {"name": name, "consent": "Y"}
                 if din:
@@ -462,7 +459,7 @@ class AuthBridgeAPI:
             return {"name": name, "entity_type": entity_type,
                     "matches": [], "is_sanctioned": False, "risk": "low"}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 headers = await self._headers(client)
                 response = await client.post(
                     f"{self.base_url}/v1/fraud/global-sanctions",  # CONFIRM with AuthBridge docs
@@ -493,7 +490,7 @@ class SerperAPI:
         if not self.api_key:
             return {"error": "Missing SERPER_API_KEY"}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 response = await client.post(
                     self.base_url,
                     headers={"X-API-KEY": self.api_key, "Content-Type": "application/json"},
@@ -523,7 +520,7 @@ class NewsAPIClient:
         if not self.api_key:
             return {"error": "Missing NEWS_API_KEY"}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 response = await client.get(
                     self.base_url,
                     params={"q": query, "apiKey": self.api_key, "language": "en", "pageSize": 10}
@@ -558,7 +555,7 @@ class GooglePlacesAPI:
         if not self.api_key:
             return {"error": "Missing GOOGLE_MAPS_API_KEY"}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 response = await client.get(
                     self.base_url,
                     params={"query": query, "key": self.api_key}
@@ -591,7 +588,7 @@ class MicrolinkAPI:
             return {"mocked": True, "data": {}}
         try:
             headers = {"x-api-key": self.api_key} if self.api_key else {}
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 response = await client.get(
                     self.base_url,
                     params={"url": f"http://{url}" if not url.startswith("http") else url},
@@ -617,7 +614,7 @@ class WikipediaAPI:
         if MOCK_MODE:
             return {"mocked": True, "data": {}}
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 search_resp = await client.get(
                     "https://en.wikipedia.org/w/api.php",
                     params={

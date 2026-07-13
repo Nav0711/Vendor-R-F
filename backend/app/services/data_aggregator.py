@@ -57,15 +57,13 @@ async def _gather_authbridge(
         keys.append("email_verification")
 
     # Court check: entity + each director + founder
-    people = []
     if legal_name:
         tasks.append(authbridge_api.check_court(legal_name, entity_type="company"))
-        keys.append(f"court_entity")
+        keys.append("court_entity")
     for i, d in enumerate((director_names or [])[:5]):
         if d:
             tasks.append(authbridge_api.check_court(d, entity_type="individual"))
             keys.append(f"court_dir_{i}")
-            people.append((i, d))
     if founder_ceo_name:
         tasks.append(authbridge_api.check_court(founder_ceo_name, entity_type="individual"))
         keys.append("court_founder")
@@ -327,6 +325,7 @@ async def aggregate_vendor_data(
     registered_address: Optional[str] = None,
     social_handles: Optional[dict] = None,
     corporate_email_domain: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> dict:
     """
     Two-phase vendor intelligence aggregation.
@@ -353,9 +352,10 @@ async def aggregate_vendor_data(
         _safe_call("serper_reviews", serper_api.search(
             f'"{legal_name}" reviews rating site:trustpilot.com OR site:glassdoor.com OR site:g2.com OR site:ambitionbox.com'
         )),
-        # General company profile — founding, HQ, size, leadership
+        # General company profile — founding, HQ, size, leadership.
+        # Category (when provided) disambiguates same-named firms in other sectors.
         _safe_call("serper_profile", serper_api.search(
-            f'"{legal_name}" company founded headquarters employees overview'
+            f'"{legal_name}" {category or ""} company founded headquarters employees overview'.replace("  ", " ")
         )),
         # Latest general news
         _safe_call("serper_news", serper_api.search(

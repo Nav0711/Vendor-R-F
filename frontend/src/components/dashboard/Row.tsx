@@ -1,4 +1,24 @@
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, CheckCircle2 } from 'lucide-react';
+
+export const BoolCell = ({ ok, yes = 'Yes ✓', no = 'No ✗' }: { ok: boolean; yes?: string; no?: string }) => (
+  <span className={`text-xs font-medium ${ok ? 'text-emerald-600' : 'text-red-600'}`}>
+    {ok ? yes : no}
+  </span>
+);
+
+export const OkBadge = ({ msg = 'Clear' }: { msg?: string }) => (
+  <span className="text-emerald-600 flex items-center gap-1 text-xs font-medium">
+    <CheckCircle2 className="w-3.5 h-3.5" /> {msg}
+  </span>
+);
+
+export const ValidCell = ({ valid, status, ok = 'Active ✓', bad = 'Invalid ✗' }: {
+  valid?: boolean; status?: string; ok?: string; bad?: string;
+}) => (
+  <span className={`font-medium text-xs ${valid ? 'text-emerald-600' : 'text-red-600'}`}>
+    {status ?? (valid ? ok : bad)}
+  </span>
+);
 
 const Row = ({
   label, value, link, linkLabel = 'View',
