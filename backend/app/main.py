@@ -12,6 +12,7 @@ import io
 
 from app.core.database import get_db, engine
 from app.core.models import Base, VendorInput, KybScan, AdverseFinding
+from app.core.public_intel_map import filter_relevant
 from app.services.data_aggregator import aggregate_vendor_data
 from app.services.llm_service import extract_findings_from_data
 from app.services.token_manager import token_manager
@@ -282,6 +283,32 @@ def _build_sources_summary(
         }
         for item in news_flat_list
     ]
+
+    # ── Category display filtering (strict sector-match; show-all + note fallback) ──
+    # Runs after all lists are assembled and after the LLM has already analysed the
+    # full data, so Findings/section summaries are unaffected. Deterministic — no LLM.
+    bucket = ss.get("category_bucket")
+    ss["news_combined"],  news_fb = filter_relevant(ss["news_combined"],  bucket, ["title", "meta"])
+    ss["serper_reviews"], rev_fb  = filter_relevant(ss["serper_reviews"], bucket, ["title", "snippet"])
+    ss["serper_profile"], prof_fb = filter_relevant(ss["serper_profile"], bucket, ["title", "snippet"])
+    ss["serper"],         adv_fb  = filter_relevant(ss["serper"],         bucket, ["title", "snippet"])
+
+    # India alt-name enrichment news (appended by Dashboard.tsx) — filter in place.
+    enr = ss.get("authbridge_enrichment") or {}
+    for _name, res in (enr.get("alternate_names_searched") or {}).items():
+        res["gdelt_results"], _ = filter_relevant(res.get("gdelt_results", []), bucket, ["title", "domain"])
+
+    # Merged adverse view for Web & Reviews: filtered generic adverse + category adverse + portal hits.
+    portal_hits = [o for p in (ss.get("serper_portals") or []) for o in (p.get("organic") or [])]
+    ss["serper_adverse_all"] = ss["serper"] + (ss.get("serper_category") or []) + portal_hits
+
+    ss["category_filter"] = {
+        "bucket": bucket,
+        "news_fallback": news_fb,
+        "reviews_fallback": rev_fb,
+        "profile_fallback": prof_fb,
+        "adverse_fallback": adv_fb,
+    }
 
     return ss
 

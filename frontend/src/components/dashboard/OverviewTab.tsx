@@ -1,15 +1,11 @@
-import { Landmark, ShieldAlert, Globe, MapPin, FileText, Tag } from 'lucide-react';
+import { Landmark, ShieldAlert, Globe, MapPin, FileText } from 'lucide-react';
 import Row, { OkBadge } from './Row';
 import Section from './Section';
 import SectionInsight from './SectionInsight';
-import { tryHost } from './utils';
 
 const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
   const sa = report.section_analysis ?? {};
   const aiUnavailable = !!(report.section_analysis?._ai_unavailable);
-  const bucket = ss.category_bucket as string | undefined;
-  const catHits = ss.serper_category ?? [];
-  const portals = ss.serper_portals ?? [];
 
   const Insight = ({ sectionKey }: { sectionKey: string }) =>
     aiUnavailable
@@ -18,30 +14,6 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
 
   return (
     <div className="space-y-4 animate-in fade-in duration-200">
-
-      {/* Category Intelligence — proves the category filter drove the search */}
-      {bucket && (
-        <Section
-          title={`Category Filter — ${bucket.replace(/_/g, ' ')}`}
-          icon={<Tag className="w-4 h-4" />}>
-          <Insight sectionKey="adverse_web" />
-          {catHits.length > 0
-            ? catHits.map((r: any, i: number) => (
-                <Row key={`c${i}`} label="Category hit" value={r.title}
-                  link={r.link} linkLabel={tryHost(r.link) || 'Visit'} />
-              ))
-            : <Row label="Category search" value="No category-specific adverse results" />}
-          {portals.map((p: any, i: number) =>
-            (p.organic?.length ?? 0) > 0
-              ? p.organic.map((r: any, j: number) => (
-                  <Row key={`p${i}-${j}`} label={p.domain} value={r.title}
-                    link={r.link} linkLabel="Portal" />
-                ))
-              : <Row key={`p${i}`} label={p.domain}
-                  value={<span className="text-muted-foreground">No “{p.keyword}” records</span>} />
-          )}
-        </Section>
-      )}
 
       {/* Corporate Registry */}
       <Section title="Corporate Registry" icon={<Landmark className="w-4 h-4" />}>

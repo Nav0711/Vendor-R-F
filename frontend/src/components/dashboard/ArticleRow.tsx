@@ -1,4 +1,5 @@
 import { ExternalLink } from 'lucide-react';
+import { siteName } from './utils';
 
 const scoreColor = (score: number) =>
   score <= 33
@@ -31,14 +32,13 @@ const ArticleRow = ({
         {source}
       </span>
       <span className="text-sm text-foreground flex-1 line-clamp-1">{title ?? '—'}</span>
-      {meta && (
-        <span className="text-xs text-muted-foreground shrink-0 hidden sm:block whitespace-nowrap">{meta}</span>
-      )}
       {url ? (
         <a href={url} target="_blank" rel="noopener noreferrer"
-          className="flex items-center gap-0.5 text-xs text-primary hover:underline shrink-0">
-          Read <ExternalLink className="w-3 h-3" />
+          className="flex items-center gap-0.5 text-xs text-primary underline underline-offset-2 hover:no-underline shrink-0 max-w-[11rem] truncate">
+          {siteName(url) || meta || 'Link'} <ExternalLink className="w-3 h-3 shrink-0" />
         </a>
+      ) : meta ? (
+        <span className="text-xs text-muted-foreground shrink-0 hidden sm:block whitespace-nowrap">{meta}</span>
       ) : <span className="w-12 shrink-0" />}
     </div>
 

@@ -200,7 +200,7 @@ const Dashboard = () => {
       {/* ── Tab panels ──────────────────────────────────────────────────────── */}
       {tab === 'overview' && <OverviewTab  ss={ss} report={report} />}
       {tab === 'findings' && <FindingsTab  findings={report.adverse_findings ?? []} findingsCount={findingsCount} />}
-      {tab === 'news'     && <NewsTab      allNews={allNews} />}
+      {tab === 'news'     && <NewsTab      allNews={allNews} showingAll={ss.category_filter?.news_fallback} bucket={ss.category_filter?.bucket} />}
       {tab === 'web'      && <WebTab       ss={ss} report={report} />}
       {tab === 'india'    && <IndiaTab     ss={ss} />}
     </div>

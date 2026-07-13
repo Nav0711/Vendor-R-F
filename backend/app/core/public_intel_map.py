@@ -55,6 +55,74 @@ PORTAL_CHECKS = {
     SERVICE_GENERAL: [],
 }
 
+# ── Display filtering ─────────────────────────────────────────────────────────
+# Broad sector/product vocabulary used to keep only category-relevant items in the
+# News & Media and Web & Reviews tabs. Much wider than RISK_LEXICON (which is only
+# about *bad* events) because a legitimate, on-topic result may not mention any risk
+# word — but it should still mention its sector. SERVICE_GENERAL has no vocabulary,
+# so vendors in that bucket (and unrecognised categories) are never filtered.
+RELEVANCE_TERMS = {
+    FOOD_INGREDIENT: [
+        "food", "ingredient", "edible", "dairy", "milk", "cream", "butter",
+        "chocolate", "cocoa", "flavour", "flavor", "colour", "color", "fruit",
+        "juice", "pulp", "sugar", "syrup", "spice", "biscuit", "cake", "candy",
+        "confection", "beverage", "bakery", "nutrition", "fssai", "adulteration",
+        "recall", "contamination", "fmcg",
+    ],
+    FOOD_PACKAGING: [
+        "packaging", "packing", "pack", "carton", "laminate", "film", "label",
+        "printing", "corrugat", "box", "foil", "pouch", "sachet", "cup", "lid",
+        "tub", "closure", "bottle", "plastic", "paper", "flexible packaging",
+        "cpcb", "ngt", "pollution", "effluent",
+    ],
+    GAS_CHEMICAL: [
+        "gas", "chemical", "co2", "carbon dioxide", "nitrogen", "ammonia", "lpg",
+        "oxygen", "solvent", "cylinder", "refrigerant", "industrial", "hazardous",
+        "peso", "explosion", "leak", "caustic", "acid", "petrochemical",
+    ],
+    CAPEX_COOLER: [
+        "cooler", "freezer", "refrigerat", "chiller", "visi", "cold storage",
+        "hvac", "compressor", "equipment", "machine", "machinery", "appliance",
+        "deep freezer", "bis",
+    ],
+    SERVICE_GENERAL: [],
+}
+
+
+def category_relevance(text: str, bucket: str) -> int:
+    """
+    Deterministic category-relevance score (no LLM). Counts case-insensitive
+    substring hits of the bucket vocabulary. Buckets with no vocabulary
+    (SERVICE_GENERAL / unknown) return a high score so nothing is filtered out.
+    """
+    terms = RELEVANCE_TERMS.get(bucket)
+    if not terms:
+        return 100
+    t = (text or "").lower()
+    hits = sum(1 for term in terms if term in t)
+    return min(100, hits * 40)
+
+
+def filter_relevant(items: list, bucket: str, fields: list[str]) -> tuple[list, bool]:
+    """
+    Keep only items whose combined `fields` text is relevant to the category.
+    Returns (filtered_items, fell_back). If strict filtering would empty a
+    non-empty list, the ORIGINAL list is returned with fell_back=True so callers
+    can show a "no strong category match — showing all" note instead of a blank tab.
+    """
+    if not items:
+        return items, False
+
+    def _text(it) -> str:
+        if not isinstance(it, dict):
+            return str(it)
+        return " ".join(str(it.get(f, "") or "") for f in fields)
+
+    kept = [it for it in items if category_relevance(_text(it), bucket) > 0]
+    if kept:
+        return kept, False
+    return items, True
+
 
 @dataclass
 class SerperPlan:
