@@ -163,10 +163,14 @@ def _build_sources_summary(
         {"title": f"Legal filings history of {name}", "description": f"An audit of public records for {name} reveals no major active litigations.", "url": "https://newsapi.org/mock-article-1", "source": "Legal Watch", "publishedAt": datetime.utcnow().isoformat()},
     ]
 
-    # 3. Serper
+    # 3. Serper — generic adverse, category-specific adverse, and portal checks
     ss["serper"] = _d("serper").get("organic") or [
         {"title": f"{name} - Official Corporate Information", "link": f"https://www.{vendor.website_domain or 'example.com'}", "snippet": f"Official homepage for {name}. Reviews, products, and services."},
     ]
+    ss["serper_category"] = _d("serper_category").get("organic") or []
+    ss["serper_portals"]  = aggregated_data.get("serper_portals") or []
+    ss["category_bucket"] = aggregated_data.get("category_bucket")
+    ss["category_needs_review"] = aggregated_data.get("category_needs_review", False)
 
     # 4. OpenSanctions
     sanctions_results = [r for v in _d("opensanctions").values() if isinstance(v, dict) for r in v.get("results", [])]

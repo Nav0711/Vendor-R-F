@@ -7,6 +7,8 @@ import socket
 from datetime import datetime
 from typing import Optional
 
+from app.services.serper_budget import serper_budget
+
 logger = logging.getLogger(__name__)
 MOCK_MODE = os.getenv("MOCK_API_CALLS", "false").lower() == "true" or os.getenv("TEST_MODE", "false").lower() == "true"
 
@@ -489,6 +491,10 @@ class SerperAPI:
             return {"mocked": True, "data": {}}
         if not self.api_key:
             return {"error": "Missing SERPER_API_KEY"}
+        # Credit control: never let one scan/batch drain the non-replenishing pool.
+        if not serper_budget.try_spend(1):
+            logger.warning("Serper daily budget exhausted — skipping query: %s", query[:80])
+            return {"error": "serper_budget_exhausted", "skipped": True, "organic": []}
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 response = await client.post(

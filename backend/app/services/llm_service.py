@@ -4,6 +4,8 @@ import os
 import logging
 import random
 
+from app.services.gemini_budget import gemini_budget
+
 logger = logging.getLogger(__name__)
 
 MOCK_MODE = os.getenv("MOCK_API_CALLS", "false").lower() == "true" or os.getenv("TEST_MODE", "false").lower() == "true"
@@ -64,6 +66,108 @@ def _slim_data_for_llm(data: dict) -> dict:
         k: _compact(v)
         for k, v in data.items()
         if k not in _ALIAS_KEYS and k not in _NEWS_KEYS_IN_FLAT
+    }
+
+
+# ── Heuristic (no-AI) section analysis ────────────────────────────────────────
+# When Gemini is unavailable (quota exhausted / no key), we still want every scan
+# to SHOW a summary sentence per section and to prove the category filtering ran —
+# without spending a single token. These sentences are computed from the data by
+# simple counting, not by an LLM, so criticality stays conservative (we can't judge
+# sentiment) but relevance reflects how much data each source returned.
+
+def _n(x) -> int:
+    return len(x) if isinstance(x, list) else 0
+
+
+def _organic(d) -> list:
+    return (d or {}).get("organic", []) if isinstance(d, dict) else []
+
+
+def _heuristic_section_analysis(data: dict) -> dict:
+    """Build an AI-free section_analysis dict from raw aggregated data."""
+    def sec(summary, relevance, criticality):
+        return {"summary": summary, "relevance": int(relevance), "criticality": int(criticality)}
+
+    # Corporate registry
+    companies = (data.get("opencorporates") or {}).get("companies") or []
+    corp = sec(
+        f"{len(companies)} corporate registry record(s) found." if companies
+        else "No corporate registry records returned.",
+        70 if companies else 30, 10)
+
+    # Sanctions
+    sanc_hits = sum(
+        1 for v in (data.get("opensanctions") or {}).values()
+        if isinstance(v, dict) for r in v.get("results", []) if r.get("caption")
+    )
+    sanctions = sec(
+        f"{sanc_hits} possible watchlist match(es) — review required." if sanc_hits
+        else "No sanctions or watchlist matches found.",
+        90 if sanc_hits else 60, 70 if sanc_hits else 5)
+
+    # Domain / SSL
+    whois = data.get("whois") or {}
+    ssl = data.get("ssl") or {}
+    has_domain = bool(whois and "error" not in whois) or bool(ssl and "error" not in ssl)
+    domain_ssl = sec(
+        "Domain WHOIS/SSL data retrieved." if has_domain else "No domain provided or domain data unavailable.",
+        55 if has_domain else 20, 8)
+
+    # Physical address
+    places = (data.get("google_places") or {}).get("results") or []
+    physical = sec(
+        f"{len(places)} location record(s) found." if places else "No physical location data found.",
+        50 if places else 20, 10)
+
+    # Wikipedia
+    wiki = data.get("wikipedia") or {}
+    wikipedia = sec(
+        "Public Wikipedia presence found." if wiki.get("found") else "No Wikipedia presence found.",
+        40 if wiki.get("found") else 15, 5)
+
+    # News / media
+    gdelt_n = sum(_n(v.get("results")) for v in (data.get("gdelt") or {}).values() if isinstance(v, dict))
+    news_n = gdelt_n + _n((data.get("newsapi") or {}).get("articles")) + _n(_organic(data.get("serper_news")))
+    news = sec(
+        f"{news_n} news/media item(s) collected across sources." if news_n
+        else "No news or media coverage found.",
+        min(85, 40 + news_n * 3) if news_n else 30, 15)
+
+    # Reviews
+    rev_n = _n(_organic(data.get("serper_reviews")))
+    reviews = sec(
+        f"{rev_n} review-site result(s) found." if rev_n else "No customer/employee review data found.",
+        60 if rev_n else 30, 12)
+
+    # Company profile
+    prof_n = _n(_organic(data.get("serper_profile")))
+    profile = sec(
+        f"{prof_n} company-profile result(s) found." if prof_n else "No company profile data found.",
+        55 if prof_n else 30, 8)
+
+    # Adverse web — highlights the category filtering
+    bucket = data.get("category_bucket") or "SERVICE_GENERAL"
+    generic_n = _n(_organic(data.get("serper")))
+    cat_n = _n(_organic(data.get("serper_category")))
+    portal_hits = sum(_n(p.get("organic")) for p in (data.get("serper_portals") or []))
+    adverse = sec(
+        f"Category-tuned search ({bucket}): {generic_n} generic + {cat_n} category-specific "
+        f"adverse result(s); {portal_hits} regulator-portal hit(s).",
+        min(90, 50 + cat_n * 3 + portal_hits * 5),
+        min(80, 15 + portal_hits * 15))
+
+    return {
+        "corporate_registry": corp,
+        "sanctions_watchlists": sanctions,
+        "domain_ssl": domain_ssl,
+        "physical_address": physical,
+        "wikipedia": wikipedia,
+        "news_media": news,
+        "reviews": reviews,
+        "company_profile": profile,
+        "adverse_web": adverse,
+        "_heuristic": True,
     }
 
 
@@ -182,7 +286,15 @@ Analyze the provided data and return a structured JSON object with three keys: f
 - opencorporates: Company registry lookup
 - opensanctions: Sanctions / PEP screening on legal name + all directors
 - gdelt: Global news search (company + CEO/founder + directors)
-- serper: Adverse web search (fraud/scam)
+- serper: Adverse web search — universal risk terms (fraud/penalty/blacklisted/raid/insolvency)
+- serper_category: Adverse web search — CATEGORY-SPECIFIC risk terms for this vendor's compliance
+    bucket (e.g. recall/adulteration for food, explosion/gas leak for chemicals, pollution/NGT for
+    packaging). Adverse hits here are HIGH signal — they directly match the vendor's real risk profile.
+- serper_portals: Site-restricted searches of official government regulator portals (FSSAI, CPCB,
+    NGT, PESO, BIS). Each item = {{domain, keyword, organic:[...]}}. Any genuine hit naming this vendor
+    is an OFFICIAL regulatory action → treat as HIGH or CRITICAL.
+- category_bucket: The resolved compliance bucket (FOOD_INGREDIENT | FOOD_PACKAGING | GAS_CHEMICAL |
+    CAPEX_COOLER | SERVICE_GENERAL). Focus the analysis on risks relevant to this bucket.
 - serper_reviews: Review sites — Trustpilot, Glassdoor, G2, AmbitionBox
 - serper_profile: Company overview — founding, HQ, employees
 - serper_news: Latest general news
@@ -256,7 +368,13 @@ For each article (referenced by its [index]):
 **Adverse Media (news_adverse):**
 - newsapi or gdelt: fraud, lawsuits, or scandals → HIGH or CRITICAL risk
 - serper_news: Recent shutdown, investigation, or negative development → MEDIUM–HIGH risk
+- serper_category: category-specific adverse hit (recall, adulteration, explosion, pollution, etc.) → HIGH risk
 - sandbox_enrichment.by_alternate_name[X].gdelt: adverse news under an alternate name → HIGH risk
+
+**Category / Regulator Portals (regulatory_issue):**
+- serper_portals[X].organic: an official FSSAI/CPCB/NGT/PESO/BIS result naming this vendor
+  (recall, closure notice, accident, direction, violation) → HIGH or CRITICAL risk.
+  Ignore generic portal pages that do NOT name the vendor.
 
 **Sanctions / PEP (sanctions_match / pep_match):**
 - opensanctions: Any match on legal name or director → CRITICAL risk
@@ -309,8 +427,15 @@ Return ONLY a valid JSON object. No preamble, no markdown fences. Example struct
 If NO adverse findings, set "findings" to [].
 If no news articles were provided, set "news_article_analysis" to []."""
 
+    # Free-tier budget guard: if the daily call/token cap is reached, skip the
+    # API entirely and use the zero-token heuristic summaries instead.
+    if not gemini_budget.can_call():
+        logger.warning("Gemini daily budget reached (%s) — using heuristic summaries", gemini_budget.status())
+        return [], 0, _heuristic_section_analysis(aggregated_data), []
+
     try:
-        logger.info(f"Calling Gemini ({GEMINI_MODEL}) for findings + section analysis + article analysis...")
+        logger.info(f"Calling Gemini ({GEMINI_MODEL}) for findings + section analysis + article analysis... budget={gemini_budget.status()}")
+        gemini_budget.reserve_call()
 
         response = await client.aio.models.generate_content(
             model=GEMINI_MODEL,
@@ -349,13 +474,14 @@ If no news articles were provided, set "news_article_analysis" to []."""
         news_article_analysis = response_json.get("news_article_analysis", [])
 
         tokens_used = response.usage_metadata.total_token_count if response.usage_metadata else 0
-        logger.info(f"Extracted {len(findings)} findings, {len(news_article_analysis)} article scores using {tokens_used} tokens")
+        gemini_budget.add_tokens(tokens_used)
+        logger.info(f"Extracted {len(findings)} findings, {len(news_article_analysis)} article scores using {tokens_used} tokens (budget={gemini_budget.status()})")
 
         return findings, tokens_used, section_analysis, news_article_analysis
 
     except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse Gemini response as JSON: {e}")
-        return [], 0, {"_ai_unavailable": True}, []
+        logger.error(f"Failed to parse Gemini response as JSON: {e} — falling back to heuristic summaries")
+        return [], 0, _heuristic_section_analysis(aggregated_data), []
     except Exception as e:
-        logger.error(f"Gemini API error: {type(e).__name__}: {e}")
-        return [], 0, {"_ai_unavailable": True}, []
+        logger.error(f"Gemini API error: {type(e).__name__}: {e} — falling back to heuristic summaries")
+        return [], 0, _heuristic_section_analysis(aggregated_data), []

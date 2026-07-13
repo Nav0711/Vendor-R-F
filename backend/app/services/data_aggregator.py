@@ -3,6 +3,7 @@ from app.api.endpoints import (
     authbridge_api, sandbox_api,  # sandbox_api is an alias for authbridge_api
     serper_api, news_api, google_places_api, microlink_api, wikipedia_api
 )
+from app.core.public_intel_map import build_serper_plan
 import asyncio
 import logging
 from typing import Optional
@@ -338,6 +339,16 @@ async def aggregate_vendor_data(
     if founder_ceo_name and founder_ceo_name not in all_names:
         all_names.append(founder_ceo_name)
 
+    # ── Category-oriented Serper plan ──────────────────────────────────────
+    # Resolve the Excel category to a compliance bucket, then tailor the adverse
+    # web search + government-portal checks to that bucket. The raw Excel code
+    # (e.g. "RM CHOCOLATE") is never searched directly — a plain-English product
+    # hint ("food ingredients manufacturer") is used to disambiguate the entity.
+    location = city or jurisdiction_country or ""
+    serper_plan = build_serper_plan(legal_name, category, location)
+    logger.info("Category '%s' → bucket %s (%d portal checks)",
+                category, serper_plan.bucket, len(serper_plan.portals))
+
     # ── Phase 1: core tasks ────────────────────────────────────────────────
     tasks = [
         _safe_call("opencorporates", opencorp.search_company(
@@ -345,17 +356,19 @@ async def aggregate_vendor_data(
         )),
         _safe_call("opensanctions", _gather_sanctions(all_names)),
         _safe_call("gdelt", _gather_gdelt(legal_name, founder_ceo_name, director_names)),
-        # Adverse search — fraud / scam / complaints
-        _safe_call("serper", serper_api.search(f"{legal_name} fraud scam complaints reviews")),
+        # Adverse web search — universal risk terms (Serper)
+        _safe_call("serper", serper_api.search(serper_plan.adverse_generic_q)),
+        # Adverse web search — category-specific risk terms + product hint (Serper)
+        _safe_call("serper_category", serper_api.search(serper_plan.adverse_category_q)),
         _safe_call("newsapi", news_api.search_news(f"{legal_name} AND (fraud OR scandal OR lawsuit)")),
         # Customer/employee reviews — Trustpilot, Glassdoor, G2, AmbitionBox
         _safe_call("serper_reviews", serper_api.search(
             f'"{legal_name}" reviews rating site:trustpilot.com OR site:glassdoor.com OR site:g2.com OR site:ambitionbox.com'
         )),
         # General company profile — founding, HQ, size, leadership.
-        # Category (when provided) disambiguates same-named firms in other sectors.
+        # Product hint (from the resolved bucket) disambiguates same-named firms.
         _safe_call("serper_profile", serper_api.search(
-            f'"{legal_name}" {category or ""} company founded headquarters employees overview'.replace("  ", " ")
+            f'"{legal_name}" {serper_plan.product_hint} company founded headquarters employees overview'.replace("  ", " ").strip()
         )),
         # Latest general news
         _safe_call("serper_news", serper_api.search(
@@ -368,6 +381,10 @@ async def aggregate_vendor_data(
             f"{legal_name} AND (penalty OR fine OR SEBI OR SEC OR regulatory OR compliance)"
         )),
     ]
+
+    # Category government-portal checks — site-restricted Serper (FSSAI/CPCB/PESO/NGT/BIS)
+    for i, (_domain, _keyword, portal_q) in enumerate(serper_plan.portals):
+        tasks.append(_safe_call(f"serper_portal_{i}", serper_api.search(portal_q)))
 
     if website_domain:
         tasks.extend([
@@ -402,6 +419,19 @@ async def aggregate_vendor_data(
 
     results_phase1 = await asyncio.gather(*tasks)
     aggregated = {k: v for k, v in results_phase1}
+
+    # ── Category metadata + collapse portal checks into one list ───────────
+    aggregated["category_bucket"] = serper_plan.bucket
+    aggregated["category_needs_review"] = serper_plan.needs_review
+    portals = []
+    for i, (domain, keyword, portal_q) in enumerate(serper_plan.portals):
+        r = aggregated.pop(f"serper_portal_{i}", None) or {}
+        portals.append({
+            "domain": domain,
+            "keyword": keyword,
+            "organic": r.get("organic", []),
+        })
+    aggregated["serper_portals"] = portals
 
     # ── Phase 2: AuthBridge-driven alternate-name enrichment (India only) ─
     ab_results = aggregated.get("authbridge_tsp", {})
