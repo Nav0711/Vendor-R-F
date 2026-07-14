@@ -71,6 +71,37 @@ class GeminiBudget:
             self._rollover()
             return self._calls < CALL_CAP and self._tokens < TOKEN_CAP
 
+    def can_afford(self, est_tokens: int) -> bool:
+        """True if a call costing roughly `est_tokens` still fits under both caps.
+
+        Unlike can_call(), this checks the cap against the projected total, so an
+        oversized scan is rejected BEFORE it spends the rest of the day's tokens.
+        """
+        with self._lock:
+            self._rollover()
+            return self._calls < CALL_CAP and self._tokens + max(0, int(est_tokens)) <= TOKEN_CAP
+
+    def reserve(self, est_tokens: int):
+        """Charge one call plus its estimated tokens, atomically, before the API call.
+
+        Reserving up-front means a call that fails or times out still counts against
+        the budget — the tokens were spent regardless of whether we got a response.
+        reconcile() later corrects the estimate to the actual figure.
+        """
+        with self._lock:
+            self._rollover()
+            self._calls += 1
+            self._tokens += max(0, int(est_tokens))
+            self._save()
+
+    def reconcile(self, est_tokens: int, actual_tokens: int):
+        """Replace the reserved estimate with the actual usage, after the response."""
+        with self._lock:
+            self._rollover()
+            delta = max(0, int(actual_tokens)) - max(0, int(est_tokens))
+            self._tokens = max(0, self._tokens + delta)
+            self._save()
+
     def reserve_call(self):
         """Count one request. Call this immediately before hitting the API."""
         with self._lock:

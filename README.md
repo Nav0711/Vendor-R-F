@@ -217,7 +217,7 @@ GEMINI_MODEL=gemini-2.0-flash
 
 | Env Var | Provider | Status | Purpose |
 |---------|----------|--------|---------|
-| `GEMINI_API_KEY` | Google AI Studio | **Required** | LLM findings extraction & risk synthesis |
+| `GEMINI_API_KEY` | Google AI Studio (`AIza…`) *or* Vertex AI express mode (`AQ.Ab…`) | **Required** | LLM findings extraction & risk synthesis. The transport is auto-detected from the key prefix; set `GEMINI_API_BACKEND=studio\|vertex` to force it. |
 | `OPENSANCTIONS_API_KEY` | OpenSanctions | **Required** | Sanctions & PEP screening |
 | `SERPER_API_KEY` | Serper.dev | **Required** | Adverse web, reviews, profile, news |
 | `NEWS_API_KEY` | NewsAPI.org | **Required** | Adverse media + regulatory news |

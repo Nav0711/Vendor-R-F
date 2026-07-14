@@ -4,7 +4,7 @@ sqlalchemy
 pydantic
 python-dotenv
 httpx
-google-genai
+google-genai>=1.16.0
 pytest
 pymysql
 cryptography

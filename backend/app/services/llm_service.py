@@ -11,8 +11,29 @@ logger = logging.getLogger(__name__)
 MOCK_MODE = os.getenv("MOCK_API_CALLS", "false").lower() == "true" or os.getenv("TEST_MODE", "false").lower() == "true"
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 api_key = os.getenv("GEMINI_API_KEY")
+# auto | studio | vertex — override if prefix detection ever guesses wrong
+GEMINI_API_BACKEND = os.getenv("GEMINI_API_BACKEND", "auto").lower()
 
-client = genai.Client(api_key=api_key) if api_key else None
+
+def _build_client(key):
+    """AI Studio keys start with 'AIza'; Vertex express-mode keys start with 'AQ.'.
+    The two speak to different endpoints, so the transport has to match the key."""
+    if not key:
+        return None
+
+    mode = GEMINI_API_BACKEND
+    if mode == "auto":
+        mode = "vertex" if key.startswith("AQ.") else "studio"
+
+    if mode == "vertex":
+        logger.info("Gemini: Vertex AI express mode (key prefix AQ.)")
+        return genai.Client(vertexai=True, api_key=key)
+
+    logger.info("Gemini: AI Studio / Developer API")
+    return genai.Client(api_key=key)
+
+
+client = _build_client(api_key)
 
 _CLEAN_SECTION_ANALYSIS = {
     "corporate_registry":   {"summary": "Entity shows active registration with no dissolution or filing irregularities detected.", "relevance": 85, "criticality": 10},
@@ -44,10 +65,38 @@ _DROP_KEYS = {"raw_response", "raw", "html", "content", "body", "_raw"}
 _ALIAS_KEYS = {"sandbox_tsp", "sandbox_intel", "sandbox_enrichment"}
 # News sources already represented (title + url + source) in the flat news index.
 _NEWS_KEYS_IN_FLAT = {"gdelt", "newsapi", "newsapi_regulatory", "serper_news"}
+# Per-alternate-name enrichment re-runs the whole search graph. Its news sub-results
+# are already covered by the flat news index, so sending them again is the single
+# largest redundant block in the prompt (~10 KB per alternate name).
+_ENRICHMENT_NEWS_KEYS = {"news_results", "newsapi_results", "regulatory_results", "gdelt_results"}
+
+# Articles sent to Gemini for scoring. Drives BOTH input and output size, since the
+# prompt asks for one analysis object per indexed article. Lower = cheaper scan.
+MAX_NEWS_ARTICLES = int(os.getenv("GEMINI_MAX_NEWS_ARTICLES", "25"))
+# Per-scan ceiling. Above this the prompt is rebuilt without enrichment so that no
+# single vendor can drain the daily budget.
+MAX_PROMPT_TOKENS = int(os.getenv("GEMINI_MAX_PROMPT_TOKENS", "15000"))
+
+_ADVERSE_TERMS = ("fraud", "scam", "penalt", "fine", "raid", "probe", "lawsuit", "sued",
+                  "blacklist", "insolven", "recall", "adulterat", "pollut", "violation",
+                  "arrest", "seiz", "notice", "default", "ban")
+
+# Rough token accounting, used to size a call BEFORE spending it. A local estimate
+# beats client.models.count_tokens() here — that would be an extra network round trip
+# on every scan just to decide whether to make the real one.
+_CHARS_PER_TOKEN = 4
+# Static prompt scaffolding (source legend + task rules + JSON example) is ~10.2 KB
+# and paid on every scan regardless of the data.
+_SCAFFOLD_TOKENS = 2600
 
 
-def _compact(obj, max_list: int = 5, max_str: int = 240):
-    """Recursively cap list lengths, truncate long strings, and drop heavy keys."""
+def _compact(obj, max_list: int = 4, max_str: int = 160):
+    """Recursively cap list lengths, truncate long strings, and drop heavy keys.
+
+    max_str dominates the payload size — search snippets are the bulk of it. 160 chars
+    still carries the adverse signal (the headline and the first clause) while costing
+    a third less than the full snippet.
+    """
     if isinstance(obj, dict):
         return {
             k: _compact(v, max_list, max_str)
@@ -60,13 +109,57 @@ def _compact(obj, max_list: int = 5, max_str: int = 240):
     return obj
 
 
-def _slim_data_for_llm(data: dict) -> dict:
+def _slim_enrichment(enrichment) -> dict:
+    """Compact authbridge_enrichment, dropping the nested news already in the flat index."""
+    if not isinstance(enrichment, dict):
+        return _compact(enrichment)
+
+    slim = {}
+    for key, value in enrichment.items():
+        if key != "by_alternate_name" or not isinstance(value, dict):
+            slim[key] = _compact(value)
+            continue
+        slim[key] = {
+            name: {
+                k: _compact(v, max_list=3)
+                for k, v in results.items() if k not in _ENRICHMENT_NEWS_KEYS
+            } if isinstance(results, dict) else _compact(results, max_list=3)
+            for name, results in value.items()
+        }
+    return slim
+
+
+def _slim_data_for_llm(data: dict, include_enrichment: bool = True) -> dict:
     """Produce a compact copy of the aggregated data for the LLM prompt."""
-    return {
-        k: _compact(v)
-        for k, v in data.items()
-        if k not in _ALIAS_KEYS and k not in _NEWS_KEYS_IN_FLAT
-    }
+    slim = {}
+    for k, v in data.items():
+        if k in _ALIAS_KEYS or k in _NEWS_KEYS_IN_FLAT:
+            continue
+        if k == "authbridge_enrichment":
+            if not include_enrichment:
+                continue
+            slim[k] = _slim_enrichment(v)
+        else:
+            slim[k] = _compact(v)
+    return slim
+
+
+def _rank_news_for_llm(news_flat_list: list, limit: int) -> list:
+    """Select the most analysis-worthy articles, adverse-signal headlines first.
+
+    Each item keeps its ORIGINAL `index` — main.py assigns indices across the full
+    list and maps Gemini's news_article_analysis back onto it by index, so
+    re-indexing here would silently misattribute every score.
+    """
+    if limit <= 0 or len(news_flat_list) <= limit:
+        return news_flat_list
+
+    def adverse_score(item):
+        title = (item.get("title") or "").lower()
+        return sum(term in title for term in _ADVERSE_TERMS)
+
+    ranked = sorted(news_flat_list, key=lambda i: (-adverse_score(i), i["index"]))
+    return sorted(ranked[:limit], key=lambda i: i["index"])
 
 
 # ── Heuristic (no-AI) section analysis ────────────────────────────────────────
@@ -256,11 +349,33 @@ async def extract_findings_from_data(
         findings, section_analysis, article_analysis = random.choice(scenarios)
         return findings, 1500, section_analysis, article_analysis
 
-    # Build the prompt
-    news_index_block = ""
-    if news_flat_list:
-        lines = [f"  [{item['index']}] [{item['source']}] {item['title']} — {item['url']}" for item in news_flat_list]
-        news_index_block = "\n## Flattened News Article Index (for news_article_analysis):\n" + "\n".join(lines)
+    def _news_block(items: list) -> str:
+        if not items:
+            return ""
+        lines = [f"  [{item['index']}] [{item['source']}] {item['title']} — {item['url']}" for item in items]
+        return "\n## Flattened News Article Index (for news_article_analysis):\n" + "\n".join(lines)
+
+    # Only the top-ranked articles are scored by the LLM; the rest still reach the
+    # report, just without an AI relevance score.
+    news_for_llm = _rank_news_for_llm(news_flat_list, MAX_NEWS_ARTICLES)
+    news_index_block = _news_block(news_for_llm)
+    # Compact the payload before serialising — this is the primary token saver.
+    data_block = json.dumps(_slim_data_for_llm(aggregated_data), separators=(",", ":"))
+
+    # Per-scan ceiling: if this vendor is still oversized (many alternate names or
+    # directors), drop the enrichment graph and halve the news rather than let one
+    # scan eat the whole day's budget.
+    est_input = (len(data_block) + len(news_index_block)) // _CHARS_PER_TOKEN + _SCAFFOLD_TOKENS
+    if est_input > MAX_PROMPT_TOKENS:
+        logger.warning("Prompt ~%d tokens exceeds GEMINI_MAX_PROMPT_TOKENS=%d — dropping enrichment "
+                       "and halving news", est_input, MAX_PROMPT_TOKENS)
+        news_for_llm = _rank_news_for_llm(news_flat_list, max(5, MAX_NEWS_ARTICLES // 2))
+        news_index_block = _news_block(news_for_llm)
+        data_block = json.dumps(_slim_data_for_llm(aggregated_data, include_enrichment=False),
+                                separators=(",", ":"))
+
+    logger.info("Gemini payload: %d news articles of %d, data %d chars, news %d chars",
+                len(news_for_llm), len(news_flat_list), len(data_block), len(news_index_block))
 
     category_block = ""
     if category:
@@ -274,9 +389,6 @@ This vendor operates in the "{category}" sector. Use this to keep the analysis f
   raise findings from them.
 - Only surface findings supported by evidence that genuinely relates to a "{category}" business.
 """
-
-    # Compact the payload before serialising — this is the primary token saver.
-    slim_data = _slim_data_for_llm(aggregated_data)
 
     prompt = f"""You are a KYB (Know Your Business) due diligence analyst.
 Analyze the provided data and return a structured JSON object with three keys: findings, section_analysis, and news_article_analysis.
@@ -312,12 +424,12 @@ Analyze the provided data and return a structured JSON object with three keys: f
     .defaulting_director: dict keyed by director name → MCA defaulter/disqualification status
     .global_sanctions: dict keyed by entity/director name → AuthBridge global sanctions matches
 - authbridge_intel / sandbox_intel: Entities extracted from GSTIN/PAN/MSMED — alternate trade names, registered address, business type, industry
-- authbridge_enrichment.by_alternate_name[NAME] / sandbox_enrichment.by_alternate_name[NAME]: For each alternate/registered name recovered from GSTIN/PAN/MSMED, the FULL search graph re-run — serper_results (adverse), reviews_results, profile_results, news_results, newsapi_results (adverse media), regulatory_results (regulatory/penalty news), gdelt_results, sanctions_results, wikipedia, opencorporates. Treat adverse hits here as HIGH signal.
+- authbridge_enrichment.by_alternate_name[NAME]: For each alternate/registered name recovered from GSTIN/PAN/MSMED, the search graph re-run — serper_results (adverse), reviews_results, profile_results, sanctions_results, wikipedia, opencorporates. Treat adverse hits here as HIGH signal. (News found under alternate names is folded into the Flattened News Article Index above, not repeated here.)
 - authbridge_enrichment.gstin_address_places: Google Places result using the GSTIN-verified registered address
 {news_index_block}
 
 ## Aggregated Data (compacted — long fields truncated, lists capped):
-{json.dumps(slim_data, separators=(",", ":"))}
+{data_block}
 
 ## Task:
 Return a single JSON object with exactly these three keys:
@@ -427,22 +539,30 @@ Return ONLY a valid JSON object. No preamble, no markdown fences. Example struct
 If NO adverse findings, set "findings" to [].
 If no news articles were provided, set "news_article_analysis" to []."""
 
-    # Free-tier budget guard: if the daily call/token cap is reached, skip the
-    # API entirely and use the zero-token heuristic summaries instead.
-    if not gemini_budget.can_call():
-        logger.warning("Gemini daily budget reached (%s) — using heuristic summaries", gemini_budget.status())
+    # The output is one analysis object per indexed article, so size the ceiling to
+    # the work: a flat 4096 both over-reserves small scans and truncates big ones
+    # mid-JSON (which burns the tokens and still lands in the fallback).
+    max_out = min(4096, 1024 + 40 * len(news_for_llm))
+    est_tokens = len(prompt) // _CHARS_PER_TOKEN + max_out
+
+    # Free-tier budget guard: reserve the estimated cost up front, so one oversized
+    # scan can't overshoot the daily cap. Under budget → zero-token heuristic summaries.
+    if not gemini_budget.can_afford(est_tokens):
+        logger.warning("Gemini call (~%d tokens) would exceed the daily budget (%s) — using heuristic summaries",
+                       est_tokens, gemini_budget.status())
         return [], 0, _heuristic_section_analysis(aggregated_data), []
 
     try:
-        logger.info(f"Calling Gemini ({GEMINI_MODEL}) for findings + section analysis + article analysis... budget={gemini_budget.status()}")
-        gemini_budget.reserve_call()
+        logger.info("Calling Gemini (%s): prompt %d chars, ~%d est tokens (max_out=%d), budget=%s",
+                    GEMINI_MODEL, len(prompt), est_tokens, max_out, gemini_budget.status())
+        gemini_budget.reserve(est_tokens)
 
         response = await client.aio.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt,
             config=genai.types.GenerateContentConfig(
                 temperature=0.2,
-                max_output_tokens=4096,
+                max_output_tokens=max_out,
                 response_mime_type="application/json",
             ),
         )
@@ -474,8 +594,8 @@ If no news articles were provided, set "news_article_analysis" to []."""
         news_article_analysis = response_json.get("news_article_analysis", [])
 
         tokens_used = response.usage_metadata.total_token_count if response.usage_metadata else 0
-        gemini_budget.add_tokens(tokens_used)
-        logger.info(f"Extracted {len(findings)} findings, {len(news_article_analysis)} article scores using {tokens_used} tokens (budget={gemini_budget.status()})")
+        gemini_budget.reconcile(est_tokens, tokens_used)
+        logger.info(f"Extracted {len(findings)} findings, {len(news_article_analysis)} article scores using {tokens_used} tokens (est {est_tokens}, budget={gemini_budget.status()})")
 
         return findings, tokens_used, section_analysis, news_article_analysis
 
