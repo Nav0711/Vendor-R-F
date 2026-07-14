@@ -31,48 +31,66 @@ const ScanSelector = () => {
   };
 
   return (
-    <div className="max-w-md mx-auto space-y-6 mt-12 relative">
+    <div className="max-w-2xl mx-auto space-y-8 mt-12 relative animate-in fade-in slide-in-from-bottom-4 duration-500">
       <button
         onClick={() => navigate(-1)}
         disabled={loading}
-        className="absolute -top-12 left-0 inline-flex items-center text-sm font-medium text-muted-foreground hover:text-primary transition-colors disabled:opacity-50"
+        className="absolute -top-14 left-0 inline-flex items-center text-sm font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
       >
-        <ArrowLeft className="w-4 h-4 mr-1" /> Go Back
+        <ArrowLeft className="w-4 h-4 mr-1.5" /> Go Back
       </button>
 
-      <div className="text-center space-y-1">
-        <h2 className="text-2xl font-semibold tracking-tight">Ready to Screen</h2>
-        <p className="text-sm text-muted-foreground">Vendor data saved. Launch a full diligence scan.</p>
+      <div className="text-center space-y-2">
+        <h2 className="text-3xl font-bold tracking-tight text-foreground">Ready to Screen</h2>
+        <p className="text-base text-muted-foreground">Vendor data saved. Launch a comprehensive diligence scan.</p>
       </div>
 
       {errorMsg && (
-        <div className="bg-red-50 text-red-700 p-4 rounded-xl border border-red-200 flex items-start gap-3">
+        <div className="bg-destructive/10 text-destructive p-4 rounded-xl border border-destructive/20 flex items-start gap-3 animate-in fade-in zoom-in-95">
           <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
           <span className="text-sm font-medium">{errorMsg}</span>
         </div>
       )}
 
-      <div
-        className="bg-card border-2 border-primary rounded-xl p-8 shadow-sm flex flex-col items-center text-center space-y-4 hover:bg-primary/5 cursor-pointer transition"
-        onClick={startScan}
-      >
-        <div className="p-4 bg-primary/10 rounded-full text-primary">
-          <ShieldCheck className="w-10 h-10" />
-        </div>
-        <div>
-          <h3 className="text-xl font-semibold">Deep Diligence</h3>
-          <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
-            Full screening — entity integrity, sanctions, UBO &amp; director checks,
-            tax/registration verification, domain intelligence, adverse media, and
-            address/digital footprint analysis.
-          </p>
-        </div>
-        <button
-          disabled={loading}
-          className="w-full bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2 rounded-md font-medium disabled:opacity-50 transition-colors"
+      <div className="grid grid-cols-1 gap-6">
+        <div
+          className={`relative bg-card border-2 rounded-2xl p-8 shadow-sm flex flex-col items-center text-center space-y-6 transition-all duration-300 ${
+            loading 
+              ? 'border-primary/50 opacity-80 cursor-wait' 
+              : 'border-transparent hover:border-primary/50 hover:shadow-xl hover:shadow-primary/5 cursor-pointer group overflow-hidden'
+          }`}
+          onClick={loading ? undefined : startScan}
         >
-          {loading ? 'Starting…' : 'Run Deep Diligence'}
-        </button>
+          {/* Subtle gradient background effect on hover */}
+          <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none" />
+
+          <div className="relative p-5 bg-primary/10 rounded-2xl text-primary group-hover:scale-110 group-hover:bg-primary group-hover:text-primary-foreground transition-all duration-300">
+            <ShieldCheck className="w-12 h-12" />
+          </div>
+          
+          <div className="relative z-10 space-y-3">
+            <h3 className="text-2xl font-bold">Deep Diligence</h3>
+            <p className="text-sm text-muted-foreground leading-relaxed max-w-md mx-auto">
+              Full screening — entity integrity, sanctions, UBO &amp; director checks,
+              tax/registration verification, domain intelligence, adverse media, and
+              address/digital footprint analysis.
+            </p>
+          </div>
+
+          <button
+            disabled={loading}
+            className="relative z-10 w-full max-w-xs bg-primary text-primary-foreground hover:bg-primary/90 h-12 px-6 rounded-xl font-semibold disabled:opacity-70 transition-colors shadow-sm flex items-center justify-center gap-2"
+          >
+            {loading ? (
+              <>
+                <div className="w-5 h-5 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
+                Starting Scan...
+              </>
+            ) : (
+              'Run Deep Diligence'
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

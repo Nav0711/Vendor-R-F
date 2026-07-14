@@ -28,10 +28,10 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
             <Row label="Type"          value={c.company_type} />
             <Row label="Status"        value={
               <span className={`flex items-center gap-1 font-medium text-xs ${
-                c.current_status === 'Active' ? 'text-emerald-600' : 'text-red-600'
+                c.current_status === 'Active' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
               }`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${
-                  c.current_status === 'Active' ? 'bg-emerald-500' : 'bg-red-500'
+                  c.current_status === 'Active' ? 'bg-emerald-500 dark:bg-emerald-400' : 'bg-destructive'
                 }`} />
                 {c.current_status ?? 'Unknown'}
               </span>
@@ -60,7 +60,11 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
             </div>
           ))
         ) : (
-          <Row label="Status" value={<OkBadge msg="No watchlist matches" />} />
+          <Row label="Status" value={
+            <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1 font-medium text-xs">
+              <CheckCircle2 className="w-3.5 h-3.5" /> No watchlist matches
+            </span>
+          } />
         )}
       </Section>
 
@@ -79,7 +83,7 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
         {ss.ssl && (
           <>
             <Row label="SSL" value={
-              <span className={`font-medium text-xs ${ss.ssl.has_ssl && !ss.ssl.is_expired ? 'text-emerald-600' : 'text-red-600'}`}>
+              <span className={`font-medium text-xs ${ss.ssl.has_ssl && !ss.ssl.is_expired ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}>
                 {ss.ssl.has_ssl ? (ss.ssl.is_expired ? 'Expired' : 'Valid ✓') : 'No SSL ✗'}
               </span>
             }
@@ -107,7 +111,7 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
             <Row label="Address" value={p.formatted_address} />
             <Row label="Status"  value={
               <span className={`font-medium text-xs ${
-                p.business_status === 'OPERATIONAL' ? 'text-emerald-600' : 'text-orange-600'
+                p.business_status === 'OPERATIONAL' ? 'text-emerald-600 dark:text-emerald-400' : 'text-orange-600 dark:text-orange-400'
               }`}>
                 {p.business_status ?? 'Unknown'}
               </span>
