@@ -4,7 +4,7 @@ import logging
 import whois
 import ssl
 import socket
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from app.services.serper_budget import serper_budget
@@ -14,6 +14,19 @@ MOCK_MODE = os.getenv("MOCK_API_CALLS", "false").lower() == "true" or os.getenv(
 
 _TIMEOUT      = 15.0  # default request timeout for all API clients
 _TIMEOUT_LONG = 20.0  # used for court-check (slower endpoint)
+
+# Wikimedia's robot policy rejects (403) any User-Agent without a contact handle.
+# Set HTTP_USER_AGENT in .env to a real address you are willing to publish.
+_USER_AGENT = os.getenv(
+    "HTTP_USER_AGENT",
+    "VendorLens/1.0 (KYB due diligence; contact: vendorlens-ops@example.com)",
+)
+
+
+def _is_configured(value: str | None) -> bool:
+    """True only for a real credential — .env placeholders like `your_key_here` are
+    truthy, which is enough to make callers attempt (and fail) live API calls."""
+    return bool(value) and not value.startswith("your_") and not value.endswith("_here")
 
 class OpenCorporatesAPI:
     def __init__(self):
@@ -110,20 +123,32 @@ class GDELTNewsAPI:
             return {"mocked": True, "data": {}}
         
         try:
-            # GDELT has free API at: api.gdeltproject.org
+            # DOC 2.0 is the only public search endpoint; `mode` is required.
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 response = await client.get(
-                    "https://api.gdeltproject.org/api/v2/search/web",
+                    "https://api.gdeltproject.org/api/v2/doc/doc",
                     params={
                         "query": f'"{company_name}" (fraud OR bankruptcy OR scandal OR lawsuit)',
+                        "mode": "artlist",
                         "format": "json",
                         "maxrecords": 10,
                         "sort": "DateDesc"
-                    }
+                    },
+                    headers={"User-Agent": _USER_AGENT},
                 )
+                # GDELT throttles hard, and one scan fires several of these concurrently.
+                # Degrade rather than retry — the scan must not stall on news.
+                if response.status_code == 429:
+                    logger.warning("GDELT rate-limited for '%s'", company_name)
+                    return {"error": "rate_limited"}
                 response.raise_for_status()
-                data = response.json()
-                results = data.get("result", [])[:10]
+                # artlist returns `articles`; a malformed query yields HTML, not JSON.
+                try:
+                    data = response.json()
+                except ValueError:
+                    logger.warning("GDELT returned a non-JSON body for '%s'", company_name)
+                    return {"error": "invalid_response"}
+                results = (data.get("articles") or [])[:10]
                 return {
                     "results": [
                         {"title": item.get("title"), "url": item.get("url"), "domain": item.get("domain")}
@@ -224,13 +249,22 @@ class AuthBridgeAPI:
     def __init__(self):
         self.api_key    = os.getenv("AUTHBRIDGE_API_KEY")
         self.api_secret = os.getenv("AUTHBRIDGE_API_SECRET")
-        self.base_url   = os.getenv("AUTHBRIDGE_BASE_URL", "https://api.authbridge.ai")
+        # No default host: the previous `https://api.authbridge.ai` does not resolve
+        # (NXDOMAIN), so it turned "unconfigured" into five DNS failures per scan.
+        # The real base URL must come from AuthBridge's docs via .env.
+        self.base_url   = (os.getenv("AUTHBRIDGE_BASE_URL") or "").rstrip("/")
         self.access_token  = None
         self.token_expiry  = None
 
+    @property
+    def is_configured(self) -> bool:
+        return _is_configured(self.api_key) and bool(self.base_url)
+
     async def _authenticate(self, client: httpx.AsyncClient) -> str:
-        if not self.api_key:
-            raise ValueError("AUTHBRIDGE_API_KEY not set in .env")
+        if not _is_configured(self.api_key):
+            raise ValueError("AUTHBRIDGE_API_KEY is not set to a real key in .env")
+        if not self.base_url:
+            raise ValueError("AUTHBRIDGE_BASE_URL is not set in .env")
         if self.access_token and self.token_expiry and datetime.utcnow() < self.token_expiry:
             return self.access_token
         response = await client.post(
@@ -240,7 +274,9 @@ class AuthBridgeAPI:
         response.raise_for_status()
         data = response.json()
         self.access_token = data.get("access_token") or data.get("token")
-        self.token_expiry = datetime.utcnow()
+        # Was utcnow() — i.e. already expired, so every single call re-authenticated.
+        expires_in = int(data.get("expires_in") or 3600)
+        self.token_expiry = datetime.utcnow() + timedelta(seconds=max(60, expires_in - 60))
         return self.access_token
 
     async def _headers(self, client: httpx.AsyncClient) -> dict:
@@ -630,7 +666,7 @@ class WikipediaAPI:
                         "namespace": 0,
                         "format": "json"
                     },
-                    headers={"User-Agent": "VendorLens/1.0 (KYB due diligence tool)"}
+                    headers={"User-Agent": _USER_AGENT}
                 )
                 search_resp.raise_for_status()
                 search_data = search_resp.json()
@@ -640,7 +676,7 @@ class WikipediaAPI:
                 title = titles[0]
                 summary_resp = await client.get(
                     f"https://en.wikipedia.org/api/rest_v1/page/summary/{title.replace(' ', '_')}",
-                    headers={"User-Agent": "VendorLens/1.0 (KYB due diligence tool)"}
+                    headers={"User-Agent": _USER_AGENT}
                 )
                 if summary_resp.status_code == 404:
                     return {"found": False}

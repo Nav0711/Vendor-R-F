@@ -152,47 +152,60 @@ def _build_sources_summary(
     name = vendor.legal_name
     _d = lambda key: (aggregated_data.get(key) or {})
 
-    # 1. GDELT
-    gdelt_results = [r for v in _d("gdelt").values() if isinstance(v, dict) for r in v.get("results", [])]
-    ss["gdelt"] = gdelt_results or [
-        {"title": f"Regulatory compliance review for {name}", "url": f"https://example.com/compliance-review-{name.lower().replace(' ', '-')}", "domain": "complianceworld.com"},
-        {"title": f"Industry report on {name} supply chain risk", "url": f"https://example.com/industry-report-{name.lower().replace(' ', '-')}", "domain": "supplychainrisk.org"},
-    ]
+    # A source that failed must never be backfilled with invented content — this is a
+    # KYB report, and a fabricated "Watchlist Match" or Wikipedia summary is worse than
+    # a visible gap. Every source records its real state here instead:
+    #   ok             → queried successfully (may legitimately be empty)
+    #   unavailable    → the API errored; we could NOT look
+    #   not_applicable → nothing to query with (no domain, no Indian ID, …)
+    status = {}
+
+    def _failed(key: str) -> bool:
+        d = aggregated_data.get(key)
+        return d is None or (isinstance(d, dict) and "error" in d)
+
+    def _mark(key: str, ok_when_present: bool = True):
+        status[key] = "unavailable" if _failed(key) else "ok"
+
+    # 1. GDELT — dict of {query: {results|error}}; unavailable only if every query failed
+    gdelt_raw = _d("gdelt")
+    gdelt_results = [r for v in gdelt_raw.values() if isinstance(v, dict) for r in v.get("results", [])]
+    gdelt_ok = any(isinstance(v, dict) and "error" not in v for v in gdelt_raw.values())
+    ss["gdelt"] = gdelt_results
+    status["gdelt"] = "ok" if gdelt_ok else "unavailable"
 
     # 2. NewsAPI
-    ss["newsapi"] = _d("newsapi").get("articles") or [
-        {"title": f"Legal filings history of {name}", "description": f"An audit of public records for {name} reveals no major active litigations.", "url": "https://newsapi.org/mock-article-1", "source": "Legal Watch", "publishedAt": datetime.utcnow().isoformat()},
-    ]
+    ss["newsapi"] = _d("newsapi").get("articles") or []
+    _mark("newsapi")
 
     # 3. Serper — generic adverse, category-specific adverse, and portal checks
-    ss["serper"] = _d("serper").get("organic") or [
-        {"title": f"{name} - Official Corporate Information", "link": f"https://www.{vendor.website_domain or 'example.com'}", "snippet": f"Official homepage for {name}. Reviews, products, and services."},
-    ]
+    ss["serper"] = _d("serper").get("organic") or []
+    _mark("serper")
     ss["serper_category"] = _d("serper_category").get("organic") or []
     ss["serper_portals"]  = aggregated_data.get("serper_portals") or []
     ss["category_bucket"] = aggregated_data.get("category_bucket")
     ss["category_needs_review"] = aggregated_data.get("category_needs_review", False)
 
-    # 4. OpenSanctions
-    sanctions_results = [r for v in _d("opensanctions").values() if isinstance(v, dict) for r in v.get("results", [])]
-    ss["opensanctions"] = sanctions_results or [
-        {"caption": f"{name} (Alias)", "schema": "Company", "properties": {"country": [vendor.jurisdiction_country or "US", "Global"], "status": ["Watchlist Match", "High Risk Flag"]}},
-    ]
+    # 4. OpenSanctions — dict of {name: {results|error}}
+    sanctions_raw = _d("opensanctions")
+    ss["opensanctions"] = [r for v in sanctions_raw.values() if isinstance(v, dict) for r in v.get("results", [])]
+    status["opensanctions"] = "ok" if any(
+        isinstance(v, dict) and "error" not in v for v in sanctions_raw.values()
+    ) else "unavailable"
 
     # 5. OpenCorporates
-    ss["opencorporates"] = _d("opencorporates").get("companies") or [
-        {"name": name, "company_number": vendor.registration_number or "Not Provided", "jurisdiction_code": vendor.jurisdiction_country or "US", "current_status": "Active"},
-    ]
+    ss["opencorporates"] = _d("opencorporates").get("companies") or []
+    _mark("opencorporates")
 
-    # 6. WHOIS
-    whois = _d("whois")
-    ss["whois"] = whois if (whois and "error" not in whois and "mocked" not in whois) else \
-        {"domain_name": vendor.website_domain or "Not Provided", "registrar": "NameCheap Inc.", "creation_date": "2018-05-12T00:00:00", "status": "clientTransferProhibited"}
-
-    # 7. SSL
-    ssl = _d("ssl")
-    ss["ssl"] = ssl if (ssl and "error" not in ssl and "mocked" not in ssl) else \
-        {"issuer": "Let's Encrypt", "has_ssl": True, "is_expired": False}
+    # 6. WHOIS / 7. SSL — both need a domain to query at all
+    for key in ("whois", "ssl"):
+        raw = _d(key)
+        usable = raw and "error" not in raw and "mocked" not in raw
+        ss[key] = raw if usable else {}
+        if not vendor.website_domain:
+            status[key] = "not_applicable"
+        else:
+            status[key] = "ok" if usable else "unavailable"
 
     # 8. AuthBridge — identity verification + fraud detection
     ab_data = aggregated_data.get("authbridge_tsp") or {}
@@ -208,24 +221,35 @@ def _build_sources_summary(
     else:
         tsp_block = {"status": "Not Applicable", "note": "No Indian identifiers provided"}
     ss["authbridge_tsp"] = ss["sandbox_tsp"] = tsp_block
+    if not has_indian_id:
+        status["authbridge_tsp"] = "not_applicable"
+    else:
+        status["authbridge_tsp"] = "ok" if (ab_data and not ab_data.get("error")) else "unavailable"
 
-    # 9. Google Places
-    ss["google_places"] = _d("google_places").get("results") or [
-        {"name": name, "formatted_address": vendor.registered_address or "Address Not Provided", "business_status": "OPERATIONAL"},
-    ]
+    # 9. Google Places — needs an address to look up
+    ss["google_places"] = _d("google_places").get("results") or []
+    if not vendor.registered_address:
+        status["google_places"] = "not_applicable"
+    else:
+        _mark("google_places")
 
-    # 10. Microlink
+    # 10. Microlink — needs a domain
     microlink = _d("microlink")
-    ss["microlink"] = microlink if (microlink and "error" not in microlink and "mocked" not in microlink) else \
-        {"status": "success", "title": f"{name} | Enterprise Solutions", "publisher": name}
+    ml_usable = microlink and "error" not in microlink and "mocked" not in microlink
+    ss["microlink"] = microlink if ml_usable else {}
+    if not vendor.website_domain:
+        status["microlink"] = "not_applicable"
+    else:
+        status["microlink"] = "ok" if ml_usable else "unavailable"
 
-    # 11. Wikipedia
+    # 11. Wikipedia — "not found" is a real answer; only an API error is "unavailable"
     wiki = _d("wikipedia")
-    ss["wikipedia"] = wiki if (wiki.get("found") and "error" not in wiki) else {
-        "found": True, "title": name,
-        "summary": f"{name} is a known corporate entity in its sector. Based in {vendor.jurisdiction_country or 'the region'}, it operates multiple facilities. The company has recently expanded its reach but has faced some public scrutiny regarding regulatory compliance.",
-        "page_url": f"https://en.wikipedia.org/wiki/{name.replace(' ', '_')}",
-    }
+    if "error" in wiki:
+        ss["wikipedia"] = {"found": False}
+        status["wikipedia"] = "unavailable"
+    else:
+        ss["wikipedia"] = wiki if wiki.get("found") else {"found": False}
+        status["wikipedia"] = "ok"
 
     # 12–15. Serper sub-searches and NewsAPI regulatory (empty list when absent)
     ss["serper_reviews"]     = _d("serper_reviews").get("organic") or []
@@ -309,6 +333,13 @@ def _build_sources_summary(
         "profile_fallback": prof_fb,
         "adverse_fallback": adv_fb,
     }
+
+    # Lets the UI (and a reader of the raw report) distinguish "we looked and found
+    # nothing" from "we could not look at all".
+    ss["source_status"] = status
+    unavailable = sorted(k for k, v in status.items() if v == "unavailable")
+    if unavailable:
+        logger.warning("Sources unavailable for %s: %s", name, ", ".join(unavailable))
 
     return ss
 
