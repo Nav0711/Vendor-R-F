@@ -46,7 +46,10 @@ async def _gather_authbridge(
       defaulting director, global sanctions
     - India-specific: GSTIN, PAN, MSME verification
     """
-    if not authbridge_api.api_key:
+    # A placeholder key ("your_authbridge_api_key_here") is truthy, so a bare
+    # truthiness check let the scan attempt live calls against an unconfigured host.
+    if not authbridge_api.is_configured:
+        logger.info("AuthBridge not configured (need AUTHBRIDGE_API_KEY + AUTHBRIDGE_BASE_URL) — skipping")
         return {}
 
     tasks = []

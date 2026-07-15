@@ -13,13 +13,13 @@ const FindingsTab = ({ findings, findingsCount }: { findings: any[]; findingsCou
         ))}
       </Section>
     ) : (
-      <div className="bg-primary/5 border border-primary/20 rounded-xl p-10 text-center space-y-3">
-        <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto">
-          <ShieldCheck className="w-6 h-6 text-primary" />
+      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-10 text-center space-y-3">
+        <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center mx-auto">
+          <ShieldCheck className="w-6 h-6 text-emerald-600" />
         </div>
         <div>
-          <h3 className="text-lg font-bold text-foreground">No Adverse Findings</h3>
-          <p className="text-sm text-muted-foreground mt-1">All checks passed for this scan depth.</p>
+          <h3 className="text-lg font-bold text-emerald-800">No Adverse Findings</h3>
+          <p className="text-sm text-emerald-700 mt-1">All checks passed for this scan depth.</p>
         </div>
       </div>
     )}

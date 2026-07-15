@@ -6,7 +6,7 @@ import { tryHost } from './utils';
 
 const RiskBadge = ({ risk }: { risk?: string }) => {
   const r = (risk || 'low').toLowerCase();
-  const cls = r === 'critical' ? 'text-destructive' : r === 'high' ? 'text-orange-600 dark:text-orange-400' : r === 'medium' ? 'text-yellow-600 dark:text-yellow-400' : 'text-emerald-600 dark:text-emerald-400';
+  const cls = r === 'critical' ? 'text-red-600' : r === 'high' ? 'text-orange-600' : r === 'medium' ? 'text-yellow-600' : 'text-emerald-600';
   return <span className={`font-medium text-xs ${cls}`}>{risk ?? 'Low'}</span>;
 };
 
@@ -31,23 +31,11 @@ const IndiaTab = ({ ss }: { ss: any }) => {
 
       {hasEmail && (
         <Section title="Email Verification" icon={<Mail className="w-4 h-4" />}>
-          <Row label="Domain"       value={emailVerif.domain ?? '—'} />
-          <Row label="Risk Level"   value={<RiskBadge risk={emailVerif.risk} />} />
-          <Row label="Deliverable"  value={
-            <span className={`text-xs font-medium ${emailVerif.deliverable ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}>
-              {emailVerif.deliverable ? 'Yes ✓' : 'No ✗'}
-            </span>
-          } />
-          <Row label="Disposable"   value={
-            <span className={`text-xs font-medium ${emailVerif.disposable ? 'text-destructive' : 'text-emerald-600 dark:text-emerald-400'}`}>
-              {emailVerif.disposable ? 'Yes — personal/disposable domain ✗' : 'No ✓'}
-            </span>
-          } />
-          <Row label="MX Records"   value={
-            <span className={`text-xs font-medium ${emailVerif.mx_records ? 'text-emerald-600 dark:text-emerald-400' : 'text-orange-600 dark:text-orange-400'}`}>
-              {emailVerif.mx_records ? 'Present ✓' : 'Missing ✗'}
-            </span>
-          } />
+          <Row label="Domain"      value={emailVerif.domain ?? '—'} />
+          <Row label="Risk Level"  value={<RiskBadge risk={emailVerif.risk} />} />
+          <Row label="Deliverable" value={<BoolCell ok={emailVerif.deliverable} />} />
+          <Row label="Disposable"  value={<BoolCell ok={!emailVerif.disposable} yes="No ✓" no="Yes — personal/disposable domain ✗" />} />
+          <Row label="MX Records"  value={<BoolCell ok={emailVerif.mx_records} yes="Present ✓" no="Missing ✗" />} />
         </Section>
       )}
 
@@ -57,8 +45,8 @@ const IndiaTab = ({ ss }: { ss: any }) => {
             <div key={name} className="mb-2">
               <Row label={name} value={
                 data.is_sanctioned
-                  ? <span className="text-destructive text-xs font-semibold">⚠ SANCTIONED — {data.matches?.length} match(es)</span>
-                  : <span className="text-emerald-600 dark:text-emerald-400 text-xs flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Clear</span>
+                  ? <span className="text-red-600 text-xs font-semibold">⚠ SANCTIONED — {data.matches?.length} match(es)</span>
+                  : <OkBadge />
               } />
               {(data.matches ?? []).map((m: any, i: number) => (
                 <Row key={i} label="Match" value={m.name ?? m.caption ?? JSON.stringify(m)} />
@@ -74,8 +62,8 @@ const IndiaTab = ({ ss }: { ss: any }) => {
             <div key={name} className="mb-2">
               <Row label={name} value={
                 (data.cases_found ?? 0) > 0
-                  ? <span className="text-orange-600 dark:text-orange-400 text-xs font-semibold">⚠ {data.cases_found} case(s) found</span>
-                  : <span className="text-emerald-600 dark:text-emerald-400 text-xs flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> No cases</span>
+                  ? <span className="text-orange-600 text-xs font-semibold">⚠ {data.cases_found} case(s) found</span>
+                  : <OkBadge msg="No cases" />
               } />
               {(data.cases ?? []).slice(0, 3).map((c: any, i: number) => (
                 <Row key={i} label={`Case ${i + 1}`} value={c.title ?? c.case_number ?? c.description ?? JSON.stringify(c)} />
@@ -91,8 +79,8 @@ const IndiaTab = ({ ss }: { ss: any }) => {
             <div key={name} className="mb-2">
               <Row label={name} value={
                 data.is_defaulter
-                  ? <span className="text-destructive text-xs font-semibold">⚠ DEFAULTER — {data.disqualification_reason ?? 'see MCA records'}</span>
-                  : <span className="text-emerald-600 dark:text-emerald-400 text-xs flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Not a defaulter</span>
+                  ? <span className="text-red-600 text-xs font-semibold">⚠ DEFAULTER — {data.disqualification_reason ?? 'see MCA records'}</span>
+                  : <OkBadge msg="Not a defaulter" />
               } />
               {data.din && <Row label="DIN" value={data.din} />}
             </div>
@@ -105,34 +93,25 @@ const IndiaTab = ({ ss }: { ss: any }) => {
           {tsp.gstin && (
             <>
               <Row label="GSTIN"        value={tsp.gstin.gstin} />
-              <Row label="GSTIN Status" value={
-                <span className={`font-medium text-xs ${tsp.gstin.valid ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}>
-                  {tsp.gstin.status ?? (tsp.gstin.valid ? 'Active ✓' : 'Invalid ✗')}
-                </span>
-              } link="https://services.gst.gov.in/services/searchtp" linkLabel="GST Portal" />
-              {tsp.gstin.taxpayer_name    && <Row label="Taxpayer"  value={tsp.gstin.taxpayer_name} />}
+              <Row label="GSTIN Status" value={<ValidCell valid={tsp.gstin.valid} status={tsp.gstin.status} />}
+                link="https://services.gst.gov.in/services/searchtp" linkLabel="GST Portal" />
+              {tsp.gstin.taxpayer_name     && <Row label="Taxpayer" value={tsp.gstin.taxpayer_name} />}
               {tsp.gstin.registration_date && <Row label="Reg Date" value={tsp.gstin.registration_date} />}
             </>
           )}
           {tsp.pan && (
             <>
               <Row label="PAN"        value={tsp.pan.pan} />
-              <Row label="PAN Status" value={
-                <span className={`font-medium text-xs ${tsp.pan.valid ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}>
-                  {tsp.pan.status ?? (tsp.pan.valid ? 'Valid ✓' : 'Invalid ✗')}
-                </span>
-              } link="https://eportal.incometax.gov.in/iec/foservices/#/pre-login/verifyYourPAN" linkLabel="IT Portal" />
+              <Row label="PAN Status" value={<ValidCell valid={tsp.pan.valid} status={tsp.pan.status} />}
+                link="https://eportal.incometax.gov.in/iec/foservices/#/pre-login/verifyYourPAN" linkLabel="IT Portal" />
               {tsp.pan.name && <Row label="PAN Holder" value={tsp.pan.name} />}
             </>
           )}
           {tsp.msmed && (
             <>
               <Row label="MSMED"        value={tsp.msmed.msmed_number} />
-              <Row label="MSMED Status" value={
-                <span className={`font-medium text-xs ${tsp.msmed.valid ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}>
-                  {tsp.msmed.status ?? (tsp.msmed.valid ? 'Active ✓' : 'Invalid ✗')}
-                </span>
-              } link="https://udyamregistration.gov.in" linkLabel="Udyam Portal" />
+              <Row label="MSMED Status" value={<ValidCell valid={tsp.msmed.valid} status={tsp.msmed.status} />}
+                link="https://udyamregistration.gov.in" linkLabel="Udyam Portal" />
               {tsp.msmed.enterprise_type && <Row label="Enterprise" value={tsp.msmed.enterprise_type} />}
               {tsp.msmed.name            && <Row label="Reg Name"   value={tsp.msmed.name} />}
               {tsp.msmed.activity        && <Row label="Activity"   value={tsp.msmed.activity} />}
@@ -181,13 +160,7 @@ const IndiaTab = ({ ss }: { ss: any }) => {
                     link={`https://www.opensanctions.org/search/?q=${encodeURIComponent(name)}`}
                     linkLabel="OpenSanctions" />
                 ))
-              : (
-                <Row label="Sanctions" value={
-                  <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1 text-xs">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> No matches for this name
-                  </span>
-                } />
-              )}
+              : <Row label="Sanctions" value={<OkBadge msg="No matches for this name" />} />}
             {(data.serper_results?.length ?? 0) === 0 && (data.gdelt_results?.length ?? 0) === 0 && (
               <Row label="Web Results" value="No results found for this alternate name" />
             )}
@@ -201,7 +174,7 @@ const IndiaTab = ({ ss }: { ss: any }) => {
               <Row label="Name"    value={p.name} />
               <Row label="Address" value={p.formatted_address} />
               <Row label="Status"  value={
-                <span className={`font-medium text-xs ${p.business_status === 'OPERATIONAL' ? 'text-emerald-600 dark:text-emerald-400' : 'text-orange-600 dark:text-orange-400'}`}>
+                <span className={`font-medium text-xs ${p.business_status === 'OPERATIONAL' ? 'text-emerald-600' : 'text-orange-600'}`}>
                   {p.business_status ?? 'Unknown'}
                 </span>
               }

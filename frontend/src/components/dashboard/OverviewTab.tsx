@@ -1,11 +1,17 @@
 import { Landmark, ShieldAlert, Globe, MapPin, FileText } from 'lucide-react';
-import Row, { OkBadge } from './Row';
+import Row, { OkBadge, UnavailableBadge } from './Row';
 import Section from './Section';
 import SectionInsight from './SectionInsight';
 
 const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
   const sa = report.section_analysis ?? {};
   const aiUnavailable = !!(report.section_analysis?._ai_unavailable);
+
+  // The backend marks every source ok | unavailable | not_applicable. An empty result
+  // from a source that FAILED must not be rendered as a clean finding.
+  const unavailable = (key: string) => ss.source_status?.[key] === 'unavailable';
+  // {} is truthy in JS, so an errored source needs a real emptiness check.
+  const hasData = (v: any) => !!v && Object.keys(v).length > 0;
 
   const Insight = ({ sectionKey }: { sectionKey: string }) =>
     aiUnavailable
@@ -28,10 +34,10 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
             <Row label="Type"          value={c.company_type} />
             <Row label="Status"        value={
               <span className={`flex items-center gap-1 font-medium text-xs ${
-                c.current_status === 'Active' ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'
+                c.current_status === 'Active' ? 'text-emerald-600' : 'text-red-600'
               }`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${
-                  c.current_status === 'Active' ? 'bg-emerald-500 dark:bg-emerald-400' : 'bg-destructive'
+                  c.current_status === 'Active' ? 'bg-emerald-500' : 'bg-red-500'
                 }`} />
                 {c.current_status ?? 'Unknown'}
               </span>
@@ -59,19 +65,17 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
               {s.properties?.status  && <Row label="Status"  value={s.properties.status.join(', ')} />}
             </div>
           ))
+        ) : unavailable('opensanctions') ? (
+          <Row label="Status" value={<UnavailableBadge msg="Sanctions screening did not run" />} />
         ) : (
-          <Row label="Status" value={
-            <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1 font-medium text-xs">
-              <CheckCircle2 className="w-3.5 h-3.5" /> No watchlist matches
-            </span>
-          } />
+          <Row label="Status" value={<OkBadge msg="No watchlist matches" />} />
         )}
       </Section>
 
       {/* Domain & SSL */}
       <Section title="Domain & SSL" icon={<Globe className="w-4 h-4" />}>
         <Insight sectionKey="domain_ssl" />
-        {ss.whois && (
+        {hasData(ss.whois) && (
           <>
             <Row label="Domain"    value={Array.isArray(ss.whois.domain_name) ? ss.whois.domain_name[0] : ss.whois.domain_name}
               link={`https://whois.domaintools.com/${report.subject.domain}`} linkLabel="WHOIS" />
@@ -80,10 +84,13 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
             <Row label="Expires"   value={ss.whois.expiration_date ? new Date(ss.whois.expiration_date).toLocaleDateString() : '—'} />
           </>
         )}
-        {ss.ssl && (
+        {unavailable('whois') && (
+          <Row label="Domain" value={<UnavailableBadge msg="WHOIS lookup unavailable" />} />
+        )}
+        {hasData(ss.ssl) && (
           <>
             <Row label="SSL" value={
-              <span className={`font-medium text-xs ${ss.ssl.has_ssl && !ss.ssl.is_expired ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}>
+              <span className={`font-medium text-xs ${ss.ssl.has_ssl && !ss.ssl.is_expired ? 'text-emerald-600' : 'text-red-600'}`}>
                 {ss.ssl.has_ssl ? (ss.ssl.is_expired ? 'Expired' : 'Valid ✓') : 'No SSL ✗'}
               </span>
             }
@@ -92,6 +99,9 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
             <Row label="Issuer"    value={ss.ssl.issuer} />
           </>
         )}
+        {unavailable('ssl') && (
+          <Row label="SSL" value={<UnavailableBadge msg="SSL check unavailable — not a missing certificate" />} />
+        )}
         {ss.microlink?.title && (
           <Row label="Site Title" value={ss.microlink.title}
             link={report.subject.domain?.startsWith('http')
@@ -99,7 +109,9 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
               : `https://${report.subject.domain}`}
             linkLabel="Visit" />
         )}
-        {!ss.whois && !ss.ssl && <Row label="Status" value="No domain provided" />}
+        {ss.source_status?.whois === 'not_applicable' && ss.source_status?.ssl === 'not_applicable' && (
+          <Row label="Status" value="No domain provided" />
+        )}
       </Section>
 
       {/* Physical Address */}
@@ -111,7 +123,7 @@ const OverviewTab = ({ ss, report }: { ss: any; report: any }) => {
             <Row label="Address" value={p.formatted_address} />
             <Row label="Status"  value={
               <span className={`font-medium text-xs ${
-                p.business_status === 'OPERATIONAL' ? 'text-emerald-600 dark:text-emerald-400' : 'text-orange-600 dark:text-orange-400'
+                p.business_status === 'OPERATIONAL' ? 'text-emerald-600' : 'text-orange-600'
               }`}>
                 {p.business_status ?? 'Unknown'}
               </span>

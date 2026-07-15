@@ -3,10 +3,10 @@ import { siteName } from './utils';
 
 const scoreColor = (score: number) =>
   score <= 33
-    ? 'text-primary bg-primary/10 border-primary/20'
+    ? 'text-emerald-600 bg-emerald-50 border-emerald-200'
     : score <= 66
-    ? 'text-yellow-600 dark:text-yellow-400 dark:text-yellow-400 bg-yellow-500/10 border-yellow-500/20'
-    : 'text-destructive bg-destructive/10 border-destructive/20';
+    ? 'text-yellow-600 bg-yellow-50 border-yellow-200'
+    : 'text-red-600 bg-red-50 border-red-200';
 
 const InsightBadge = ({ label, score }: { label: string; score: number }) => (
   <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap shrink-0 ${scoreColor(score)}`}>

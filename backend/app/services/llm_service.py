@@ -1,4 +1,5 @@
 from google import genai
+import anthropic
 import json
 import os
 import logging
@@ -10,30 +11,46 @@ logger = logging.getLogger(__name__)
 
 MOCK_MODE = os.getenv("MOCK_API_CALLS", "false").lower() == "true" or os.getenv("TEST_MODE", "false").lower() == "true"
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-api_key = os.getenv("GEMINI_API_KEY")
-# auto | studio | vertex — override if prefix detection ever guesses wrong
+# Haiku is the cheapest Claude model (~$0.02/scan) and still supports the JSON
+# schema enforcement the report pipeline depends on.
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5")
+api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("GEMINI_API_KEY")
+# auto | anthropic | studio | vertex — override if prefix detection ever guesses wrong
 GEMINI_API_BACKEND = os.getenv("GEMINI_API_BACKEND", "auto").lower()
 
 
 def _build_client(key):
-    """AI Studio keys start with 'AIza'; Vertex express-mode keys start with 'AQ.'.
-    The two speak to different endpoints, so the transport has to match the key."""
+    """Route on the key prefix — each provider speaks to a different endpoint:
+        sk-ant-  → Anthropic Messages API
+        AQ.      → Gemini via Vertex AI express mode
+        AIza     → Gemini via AI Studio
+    Returns (provider, client) so the call site knows which SDK it's holding."""
     if not key:
-        return None
+        return None, None
 
     mode = GEMINI_API_BACKEND
     if mode == "auto":
-        mode = "vertex" if key.startswith("AQ.") else "studio"
+        if key.startswith("sk-ant-"):
+            mode = "anthropic"
+        elif key.startswith("AQ."):
+            mode = "vertex"
+        else:
+            mode = "studio"
+
+    if mode == "anthropic":
+        logger.info("LLM: Anthropic Messages API (model=%s)", ANTHROPIC_MODEL)
+        return "anthropic", anthropic.AsyncAnthropic(api_key=key)
 
     if mode == "vertex":
-        logger.info("Gemini: Vertex AI express mode (key prefix AQ.)")
-        return genai.Client(vertexai=True, api_key=key)
+        logger.info("LLM: Gemini via Vertex AI express mode (key prefix AQ.)")
+        return "gemini", genai.Client(vertexai=True, api_key=key)
 
-    logger.info("Gemini: AI Studio / Developer API")
-    return genai.Client(api_key=key)
+    logger.info("LLM: Gemini via AI Studio / Developer API")
+    return "gemini", genai.Client(api_key=key)
 
 
-client = _build_client(api_key)
+PROVIDER, client = _build_client(api_key)
+LLM_MODEL = ANTHROPIC_MODEL if PROVIDER == "anthropic" else GEMINI_MODEL
 
 _CLEAN_SECTION_ANALYSIS = {
     "corporate_registry":   {"summary": "Entity shows active registration with no dissolution or filing irregularities detected.", "relevance": 85, "criticality": 10},
@@ -51,6 +68,107 @@ _CLEAN_ARTICLE_ANALYSIS = [
     {"index": 0, "summary": "Routine industry coverage with no adverse signals detected.", "relevance": 45, "criticality": 8},
     {"index": 1, "summary": "General regulatory compliance article; no company-specific issues mentioned.", "relevance": 50, "criticality": 10},
 ]
+
+# ── Response schema (Anthropic structured outputs) ────────────────────────────
+# Gemini's response_mime_type only asks for *valid* JSON; Claude enforces an actual
+# schema. That matters most for the three blocks the dashboard leans on — the news
+# index, the adverse-web hits, and the reviews — because a malformed response used
+# to land in the heuristic fallback with the tokens already spent.
+_SCORE_BLOCK = {
+    "type": "object",
+    "properties": {
+        "summary":     {"type": "string"},
+        "relevance":   {"type": "integer"},
+        "criticality": {"type": "integer"},
+    },
+    "required": ["summary", "relevance", "criticality"],
+    "additionalProperties": False,
+}
+
+_SECTION_KEYS = list(_CLEAN_SECTION_ANALYSIS.keys())
+
+_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "finding_type": {"type": "string", "enum": [
+                        "sanctions_match", "news_adverse", "regulatory_issue", "pep_match",
+                        "domain_risk", "address_risk", "review_risk", "name_mismatch", "other",
+                    ]},
+                    "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                    "title":            {"type": "string"},
+                    "description":      {"type": "string"},
+                    "source_api":       {"type": "string"},
+                    "source_url":       {"type": "string"},
+                    "confidence_score": {"type": "number"},
+                },
+                "required": ["finding_type", "severity", "title", "description",
+                             "source_api", "source_url", "confidence_score"],
+                "additionalProperties": False,
+            },
+        },
+        # Every section is required, so news_media / reviews / adverse_web always
+        # come back scored — the model can't quietly omit the ones that matter.
+        "section_analysis": {
+            "type": "object",
+            "properties": {k: _SCORE_BLOCK for k in _SECTION_KEYS},
+            "required": _SECTION_KEYS,
+            "additionalProperties": False,
+        },
+        "news_article_analysis": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index":       {"type": "integer"},
+                    "summary":     {"type": "string"},
+                    "relevance":   {"type": "integer"},
+                    "criticality": {"type": "integer"},
+                },
+                "required": ["index", "summary", "relevance", "criticality"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["findings", "section_analysis", "news_article_analysis"],
+    "additionalProperties": False,
+}
+
+
+async def _call_llm(prompt: str, max_out: int):
+    """One prompt in, (raw JSON text, tokens spent) out — same contract either provider."""
+    if PROVIDER == "anthropic":
+        response = await client.messages.create(
+            model=LLM_MODEL,
+            max_tokens=max_out,
+            # No temperature: Opus 4.7+/Sonnet 5 reject sampling params outright, so
+            # omitting it keeps this call valid if ANTHROPIC_MODEL is ever changed.
+            output_config={"format": {"type": "json_schema", "schema": _RESPONSE_SCHEMA}},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        if response.stop_reason == "max_tokens":
+            logger.warning("Claude hit the %d-token output ceiling — JSON is truncated", max_out)
+        text = next((b.text for b in response.content if b.type == "text"), "")
+        # Anthropic reports input and output separately; the budget wants the total.
+        tokens = response.usage.input_tokens + response.usage.output_tokens
+        return text, tokens
+
+    response = await client.aio.models.generate_content(
+        model=LLM_MODEL,
+        contents=prompt,
+        config=genai.types.GenerateContentConfig(
+            temperature=0.2,
+            max_output_tokens=max_out,
+            response_mime_type="application/json",
+        ),
+    )
+    tokens = response.usage_metadata.total_token_count if response.usage_metadata else 0
+    return response.text, tokens
+
 
 # ── Token optimisation ────────────────────────────────────────────────────────
 # Gemini's free tier is billed on input tokens per request. The raw aggregated
@@ -539,10 +657,14 @@ Return ONLY a valid JSON object. No preamble, no markdown fences. Example struct
 If NO adverse findings, set "findings" to [].
 If no news articles were provided, set "news_article_analysis" to []."""
 
-    # The output is one analysis object per indexed article, so size the ceiling to
-    # the work: a flat 4096 both over-reserves small scans and truncates big ones
-    # mid-JSON (which burns the tokens and still lands in the fallback).
-    max_out = min(4096, 1024 + 40 * len(news_for_llm))
+    # Size the output ceiling to what the prompt actually asks for. Per its own limits:
+    #   9 sections x 250-char summary   ~=  700 tokens
+    #   N articles x 100-char summary   ~=   45 tokens each
+    #   findings (unbounded count)      ~= 1000 tokens of headroom
+    # The old formula (1024 + 40/article) came in ~900 tokens short of that and
+    # truncated the JSON mid-string, burning the whole call for nothing.
+    # max_tokens is a CEILING, not a charge — unused headroom costs nothing.
+    max_out = min(8192, 3072 + 100 * len(news_for_llm))
     est_tokens = len(prompt) // _CHARS_PER_TOKEN + max_out
 
     # Free-tier budget guard: reserve the estimated cost up front, so one oversized
@@ -553,21 +675,12 @@ If no news articles were provided, set "news_article_analysis" to []."""
         return [], 0, _heuristic_section_analysis(aggregated_data), []
 
     try:
-        logger.info("Calling Gemini (%s): prompt %d chars, ~%d est tokens (max_out=%d), budget=%s",
-                    GEMINI_MODEL, len(prompt), est_tokens, max_out, gemini_budget.status())
+        logger.info("Calling %s (%s): prompt %d chars, ~%d est tokens (max_out=%d), budget=%s",
+                    PROVIDER, LLM_MODEL, len(prompt), est_tokens, max_out, gemini_budget.status())
         gemini_budget.reserve(est_tokens)
 
-        response = await client.aio.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=genai.types.GenerateContentConfig(
-                temperature=0.2,
-                max_output_tokens=max_out,
-                response_mime_type="application/json",
-            ),
-        )
-        response_text = response.text
-        logger.info(f"Gemini raw response (first 500 chars): {response_text[:500]}")
+        response_text, tokens_used = await _call_llm(prompt, max_out)
+        logger.info(f"LLM raw response (first 500 chars): {response_text[:500]}")
 
         # Strip markdown fences if present
         if response_text.strip().startswith("```"):
@@ -593,15 +706,14 @@ If no news articles were provided, set "news_article_analysis" to []."""
         section_analysis = response_json.get("section_analysis", {})
         news_article_analysis = response_json.get("news_article_analysis", [])
 
-        tokens_used = response.usage_metadata.total_token_count if response.usage_metadata else 0
         gemini_budget.reconcile(est_tokens, tokens_used)
         logger.info(f"Extracted {len(findings)} findings, {len(news_article_analysis)} article scores using {tokens_used} tokens (est {est_tokens}, budget={gemini_budget.status()})")
 
         return findings, tokens_used, section_analysis, news_article_analysis
 
     except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse Gemini response as JSON: {e} — falling back to heuristic summaries")
+        logger.error(f"Failed to parse LLM response as JSON: {e} — falling back to heuristic summaries")
         return [], 0, _heuristic_section_analysis(aggregated_data), []
     except Exception as e:
-        logger.error(f"Gemini API error: {type(e).__name__}: {e} — falling back to heuristic summaries")
+        logger.error(f"LLM API error ({PROVIDER}): {type(e).__name__}: {e} — falling back to heuristic summaries")
         return [], 0, _heuristic_section_analysis(aggregated_data), []

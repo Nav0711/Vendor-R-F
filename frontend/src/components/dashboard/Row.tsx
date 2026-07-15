@@ -1,4 +1,4 @@
-import { ExternalLink, CheckCircle2 } from 'lucide-react';
+import { ExternalLink, CheckCircle2, AlertCircle } from 'lucide-react';
 
 export const BoolCell = ({ ok, yes = 'Yes ✓', no = 'No ✗' }: { ok: boolean; yes?: string; no?: string }) => (
   <span className={`text-xs font-medium ${ok ? 'text-emerald-600' : 'text-red-600'}`}>
@@ -9,6 +9,14 @@ export const BoolCell = ({ ok, yes = 'Yes ✓', no = 'No ✗' }: { ok: boolean; 
 export const OkBadge = ({ msg = 'Clear' }: { msg?: string }) => (
   <span className="text-emerald-600 flex items-center gap-1 text-xs font-medium">
     <CheckCircle2 className="w-3.5 h-3.5" /> {msg}
+  </span>
+);
+
+// A source that errored is not a clean result. "We couldn't look" must never render
+// as an OkBadge — on a KYB report a false all-clear is worse than a visible gap.
+export const UnavailableBadge = ({ msg = 'Check unavailable' }: { msg?: string }) => (
+  <span className="text-muted-foreground/70 flex items-center gap-1 text-xs font-medium italic">
+    <AlertCircle className="w-3.5 h-3.5" /> {msg}
   </span>
 );
 

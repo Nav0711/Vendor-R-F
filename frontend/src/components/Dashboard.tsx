@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, XCircle, Building2, Download, Share2 } from 'lucide-react';
+import { ArrowLeft, XCircle, Building2 } from 'lucide-react';
 import { type TabKey, type NewsItem } from './dashboard/types';
 import { getRisk, tryHost } from './dashboard/utils';
 import OverviewTab from './dashboard/OverviewTab';
@@ -110,88 +110,85 @@ const Dashboard = () => {
   ];
 
   // ── Render ─────────────────────────────────────────────────────────────────
-  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-5xl mx-auto space-y-6 pb-12 animate-in fade-in duration-500">
-      {/* Back & Actions */}
-      <div className="flex items-center justify-between">
-        <button onClick={() => navigate('/')}
-          className="inline-flex items-center text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
-          <ArrowLeft className="w-4 h-4 mr-1.5" /> Back to Search
-        </button>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => window.print()}
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg border bg-background hover:bg-muted transition-colors shadow-sm"
-          >
-            <Download className="w-4 h-4" />
-            <span className="hidden sm:inline">Export PDF</span>
-          </button>
-          <button
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg border bg-background hover:bg-muted transition-colors shadow-sm"
-          >
-            <Share2 className="w-4 h-4" />
-            <span className="hidden sm:inline">Share</span>
-          </button>
-        </div>
-      </div>
+    <div className="max-w-5xl mx-auto space-y-4 pb-12">
+      {/* Back */}
+      <button onClick={() => navigate('/')}
+        className="inline-flex items-center text-sm text-muted-foreground hover:text-primary transition-colors">
+        <ArrowLeft className="w-4 h-4 mr-1" /> Back
+      </button>
 
       {/* ── Header ──────────────────────────────────────────────────────────── */}
-      <div className="bg-card border-2 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6 relative overflow-hidden">
-        {/* Subtle background flair */}
-        <div className="absolute -top-10 -right-10 w-40 h-40 bg-primary/5 rounded-full blur-3xl pointer-events-none" />
-
-        <div className="relative z-10 space-y-1.5">
-          <div className="flex items-center gap-2">
-            <h1 className="text-3xl font-bold tracking-tight text-foreground">
-              {report.subject.legal_name ?? 'Unknown Entity'}
-            </h1>
-            <div className={`px-2.5 py-0.5 rounded-full border text-xs font-bold tracking-widest flex items-center gap-1.5 ${riskStyles.badge}`}>
-              <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${riskStyles.dot}`} />
-              {riskLevel} RISK
-            </div>
-          </div>
-          <p className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-            <Building2 className="w-4 h-4" />
+      <div className="bg-card border rounded-xl px-5 py-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            {report.subject.legal_name ?? 'Unknown Entity'}
+          </h1>
+          <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
+            <Building2 className="w-3.5 h-3.5" />
             {report.subject.scan_type?.toUpperCase()} SCAN
             {report.subject.domain && (
-              <>
-                <span className="w-1 h-1 bg-border rounded-full" />
-                <span className="font-mono text-xs">{report.subject.domain}</span>
-              </>
+              <span className="border rounded px-1.5 py-0.5 font-mono text-[10px]">
+                {report.subject.domain}
+              </span>
             )}
           </p>
         </div>
 
-        <div className="relative z-10 flex items-center gap-3 md:gap-6 bg-muted/30 p-3 rounded-xl border border-muted">
-          {[
-            { label: 'Findings',    value: findingsCount },
-            { label: 'Tokens Used', value: (report.tokens_used      ?? 0).toLocaleString() },
-            { label: 'Balance',     value: (report.tokens_remaining  ?? 0).toLocaleString() },
-          ].map((s, i) => (
-            <div key={s.label} className={`text-center px-2 md:px-4 ${i !== 0 ? 'border-l border-border/50' : ''}`}>
-              <div className="text-xl md:text-2xl font-bold text-foreground">{s.value}</div>
-              <div className="text-[10px] md:text-xs font-semibold text-muted-foreground uppercase tracking-wider mt-0.5">{s.label}</div>
+        <div className="flex items-center gap-3">
+          {/* Mock / Live data source indicator */}
+          {isMock ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-amber-300 bg-amber-50 text-amber-700 text-xs font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              MOCK DATA
             </div>
-          ))}
+          ) : (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 text-xs font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              LIVE DATA
+            </div>
+          )}
+
+          {/* Summary source: real AI vs no-AI heuristic fallback */}
+          {isHeuristic ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-300 bg-slate-50 text-slate-600 text-xs font-semibold" title="Gemini was unavailable — section summaries were auto-generated from the data without AI.">
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+              AUTO SUMMARY
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-violet-300 bg-violet-50 text-violet-700 text-xs font-semibold" title="Section summaries generated by Gemini AI.">
+              <span className="w-1.5 h-1.5 rounded-full bg-violet-500" />
+              AI SUMMARY
+            </div>
+          )}
+
+          <div className={`px-3 py-1.5 rounded-lg border font-bold text-sm flex items-center gap-2 ${riskStyles.badge}`}>
+            <div className={`w-2 h-2 rounded-full animate-pulse ${riskStyles.dot}`} />
+            {riskLevel} RISK
+          </div>
+
+          <div className="text-center hidden sm:block">
+            <div className="text-base font-bold text-foreground">{findingsCount}</div>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Findings</div>
+          </div>
         </div>
       </div>
 
       {/* ── Tab bar ─────────────────────────────────────────────────────────── */}
-      <div className="bg-muted/40 p-1 rounded-xl border flex overflow-x-auto hide-scrollbar">
+      <div className="flex gap-0 border-b border-border overflow-x-auto">
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
-            className={`flex-1 min-w-[120px] px-4 py-2 text-sm font-semibold rounded-lg transition-all whitespace-nowrap flex items-center justify-center gap-2 ${
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-all whitespace-nowrap flex items-center gap-1.5 ${
               tab === t.key
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}>
             {t.label}
             {(t.count ?? 0) > 0 && (
-              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold leading-none ${
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
                 t.key === 'findings'
-                  ? 'bg-destructive/10 text-destructive'
-                  : 'bg-primary/10 text-primary'
+                  ? 'bg-destructive text-destructive-foreground'
+                  : 'bg-secondary text-secondary-foreground'
               }`}>
                 {t.count}
               </span>
@@ -201,13 +198,11 @@ const Dashboard = () => {
       </div>
 
       {/* ── Tab panels ──────────────────────────────────────────────────────── */}
-      <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-        {tab === 'overview' && <OverviewTab  ss={ss} report={report} />}
-        {tab === 'findings' && <FindingsTab  findings={report.adverse_findings ?? []} findingsCount={findingsCount} />}
-        {tab === 'news'     && <NewsTab      allNews={allNews} />}
-        {tab === 'web'      && <WebTab       ss={ss} report={report} />}
-        {tab === 'india'    && <IndiaTab     ss={ss} />}
-      </div>
+      {tab === 'overview' && <OverviewTab  ss={ss} report={report} />}
+      {tab === 'findings' && <FindingsTab  findings={report.adverse_findings ?? []} findingsCount={findingsCount} />}
+      {tab === 'news'     && <NewsTab      allNews={allNews} showingAll={ss.category_filter?.news_fallback} bucket={ss.category_filter?.bucket} />}
+      {tab === 'web'      && <WebTab       ss={ss} report={report} />}
+      {tab === 'india'    && <IndiaTab     ss={ss} />}
     </div>
   );
 };

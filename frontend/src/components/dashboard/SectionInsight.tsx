@@ -1,5 +1,5 @@
 const scoreColor = (score: number) =>
-  score <= 33 ? 'bg-emerald-500 dark:bg-emerald-400' : score <= 66 ? 'bg-yellow-500' : 'bg-destructive';
+  score <= 33 ? 'bg-emerald-500' : score <= 66 ? 'bg-yellow-500' : 'bg-red-500';
 
 const ScoreBar = ({ label, score }: { label: string; score: number }) => (
   <div className="flex items-center gap-2">
