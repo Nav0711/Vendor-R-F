@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { ArrowLeft, XCircle, Building2 } from 'lucide-react';
+import { ArrowLeft, XCircle, Building2, Tag } from 'lucide-react';
 import { type TabKey, type NewsItem } from './dashboard/types';
 import { getRisk, tryHost } from './dashboard/utils';
 import OverviewTab from './dashboard/OverviewTab';
@@ -10,6 +10,7 @@ import NewsTab from './dashboard/NewsTab';
 import WebTab from './dashboard/WebTab';
 import IndiaTab from './dashboard/IndiaTab';
 import ScanLoading from './dashboard/ScanLoading';
+import { api } from '../lib/api';
 
 const useScanReport = (scanId?: string) => {
   const [status, setStatus] = useState('PENDING');
@@ -20,13 +21,13 @@ const useScanReport = (scanId?: string) => {
     const check = async () => {
       if (stopped) return;
       try {
-        const res = await axios.get(`http://localhost:8000/scan/${scanId}/status`);
+        const res = await axios.get(api(`/scan/${scanId}/status`));
         const s = res.data.status;
         setStatus(s);
         if (TERMINAL.includes(s)) {
           stopped = true;
           if (s === 'COMPLETED') {
-            const rep = await axios.get(`http://localhost:8000/scan/${scanId}/report`);
+            const rep = await axios.get(api(`/scan/${scanId}/report`));
             setReport(rep.data);
           }
         }
@@ -124,12 +125,28 @@ const Dashboard = () => {
           <h1 className="text-2xl font-bold tracking-tight text-foreground">
             {report.subject.legal_name ?? 'Unknown Entity'}
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
+          <p className="text-xs text-muted-foreground mt-0.5 flex items-center flex-wrap gap-2">
             <Building2 className="w-3.5 h-3.5" />
             {report.subject.scan_type?.toUpperCase()} SCAN
             {report.subject.domain && (
               <span className="border rounded px-1.5 py-0.5 font-mono text-[10px]">
                 {report.subject.domain}
+              </span>
+            )}
+            {ss.category_bucket && (
+              <span
+                title={ss.category_needs_review
+                  ? 'Category could not be confidently matched — results are unfiltered.'
+                  : 'Compliance bucket used to focus adverse-media, web and reviews filtering.'}
+                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold border ${
+                  ss.category_needs_review
+                    ? 'border-amber-300 bg-amber-50 text-amber-700'
+                    : 'border-primary/30 bg-primary/5 text-primary'
+                }`}
+              >
+                <Tag className="w-2.5 h-2.5" />
+                {String(ss.category_bucket).replace(/_/g, ' ')}
+                {ss.category_needs_review && ' · review'}
               </span>
             )}
           </p>

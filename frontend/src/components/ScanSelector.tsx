@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { ShieldCheck, ArrowLeft, AlertCircle } from 'lucide-react';
+import { api } from '../lib/api';
 
 const ScanSelector = () => {
   const { inputId } = useParams();
@@ -13,7 +14,7 @@ const ScanSelector = () => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await axios.post('http://localhost:8000/scan', {
+      const res = await axios.post(api('/scan'), {
         input_id: inputId,
         scan_type: 'deep',
       });

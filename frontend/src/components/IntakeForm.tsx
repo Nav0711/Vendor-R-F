@@ -1,7 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { UploadCloud, Send, XCircle, CheckCircle2, ChevronDown } from 'lucide-react';
+import {
+  UploadCloud, Send, XCircle, CheckCircle2, ChevronDown,
+  Building2, Tag, IdCard, Users, AtSign,
+} from 'lucide-react';
+import { api } from '../lib/api';
 
 const EMPTY_FORM = {
   legal_name: '',
@@ -24,13 +28,22 @@ const EMPTY_FORM = {
   msmed_certificate_number: '',
 };
 
+// Free text — the backend keyword-matches this into a compliance bucket
+// (food / packaging / chemical-gas / capex-cooling / services). These suggestions
+// just steer the matcher toward a confident bucket.
+const CATEGORY_SUGGESTIONS = [
+  'Food & Beverage Ingredients', 'Food Packaging', 'Industrial Gas', 'Chemicals',
+  'Cooling / Refrigeration Equipment', 'Capital Equipment', 'Logistics',
+  'IT Services', 'Consulting', 'Pharmaceuticals', 'Textiles', 'Construction',
+];
+
 const Field = ({
-  label, value, onChange, placeholder, required,
+  label, value, onChange, placeholder, required, listId, className,
 }: {
   label: string; value: string; onChange: (v: string) => void;
-  placeholder?: string; required?: boolean;
+  placeholder?: string; required?: boolean; listId?: string; className?: string;
 }) => (
-  <div className="space-y-1">
+  <div className={`space-y-1 ${className ?? ''}`}>
     <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
       {label}{required && <span className="text-destructive ml-0.5">*</span>}
     </label>
@@ -38,16 +51,24 @@ const Field = ({
       required={required}
       placeholder={placeholder}
       value={value}
+      list={listId}
       onChange={e => onChange(e.target.value)}
-      className="flex h-8 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+      className="flex h-9 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm transition-shadow
+        focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary"
     />
   </div>
 );
 
-const FormSection = ({ label, children }: { label: string; children: React.ReactNode }) => (
-  <div>
-    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">{label}</p>
-    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">{children}</div>
+const Section = ({
+  icon, label, children, cols = 3,
+}: {
+  icon: React.ReactNode; label: string; children: React.ReactNode; cols?: 2 | 3;
+}) => (
+  <div className="space-y-2.5">
+    <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+      <span className="text-primary/70">{icon}</span>{label}
+    </div>
+    <div className={`grid grid-cols-2 ${cols === 3 ? 'md:grid-cols-3' : ''} gap-3`}>{children}</div>
   </div>
 );
 
@@ -87,7 +108,7 @@ const IntakeForm = () => {
     try {
       const payload = new FormData();
       payload.append('file', selectedFile);
-      const res = await axios.post('http://localhost:8000/vendor/parse-excel', payload);
+      const res = await axios.post(api('/vendor/parse-excel'), payload);
       setParsedVendors(res.data.vendors || []);
     } catch (err: any) {
       setErrorMsg(err.response?.data?.detail || 'Error parsing Excel file');
@@ -138,7 +159,7 @@ const IntakeForm = () => {
         source_method: file ? 'excel' : 'manual',
       };
       formPayload.append('manual_fields', JSON.stringify(payload));
-      const res = await axios.post('http://localhost:8000/vendor/intake', formPayload, {
+      const res = await axios.post(api('/vendor/intake'), formPayload, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       navigate(`/scan/${res.data.input_id}`);
@@ -150,7 +171,7 @@ const IntakeForm = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
+    <div className="max-w-4xl mx-auto space-y-4 animate-in fade-in duration-300">
       <div className="text-center space-y-1">
         <h2 className="text-2xl font-semibold tracking-tight">New Vendor Intake</h2>
         <p className="text-sm text-muted-foreground">Submit vendor data manually or upload the standard Excel template.</p>
@@ -194,7 +215,6 @@ const IntakeForm = () => {
           {/* Right: vendor dropdown (only when vendors parsed) */}
           {parsedVendors.length > 0 && (
             <div ref={dropdownRef} className="relative shrink-0 w-60">
-              {/* Trigger button */}
               <button
                 type="button"
                 onClick={() => setDropdownOpen(o => !o)}
@@ -208,15 +228,12 @@ const IntakeForm = () => {
                 <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground shrink-0 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
-              {/* Dropdown panel */}
               {dropdownOpen && (
-                <div className="absolute top-full left-0 right-0 z-20 mt-1 bg-card border rounded-lg shadow-lg overflow-hidden">
-                  {/* Grid header */}
+                <div className="absolute top-full left-0 right-0 z-20 mt-1 bg-card border rounded-lg shadow-lg overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150">
                   <div className="grid grid-cols-[3.5rem_1fr] bg-muted/50 border-b px-3 py-1.5">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">ID</span>
                     <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Vendor Name</span>
                   </div>
-                  {/* Grid rows */}
                   <div className="max-h-40 overflow-y-auto">
                     {parsedVendors.map((v, i) => (
                       <button
@@ -243,49 +260,70 @@ const IntakeForm = () => {
         </div>
       </div>
 
-      {/* ── Manual entry form ──────────────────────────────────────────────── */}
-      <form onSubmit={handleSubmit} className="bg-card border rounded-xl p-4 shadow-sm space-y-4">
+      {/* datalist shared by the Category field */}
+      <datalist id="category-suggestions">
+        {CATEGORY_SUGGESTIONS.map(c => <option key={c} value={c} />)}
+      </datalist>
 
-        {/* Core identity */}
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+      {/* ── Manual entry form ──────────────────────────────────────────────── */}
+      <form onSubmit={handleSubmit} className="bg-card border rounded-xl p-5 shadow-sm space-y-6">
+
+        <Section icon={<Building2 className="w-3.5 h-3.5" />} label="Business Identity">
           <Field label="Legal Name" value={formData.legal_name} onChange={set('legal_name')} required />
           <Field label="Website Domain" value={formData.website_domain} onChange={set('website_domain')} placeholder="example.com" />
           <Field label="Registration / BP No." value={formData.registration_number} onChange={set('registration_number')} />
           <Field label="Jurisdiction (ISO)" value={formData.jurisdiction_country} onChange={set('jurisdiction_country')} placeholder="US, IN, GB" />
-          <Field label="Category / Sector" value={formData.category} onChange={set('category')} placeholder="Logistics, FinTech, Pharma" />
           <Field label="Registered Address" value={formData.registered_address} onChange={set('registered_address')} />
           <Field label="City" value={formData.city} onChange={set('city')} />
+        </Section>
+
+        {/* Category — pulled out and highlighted; it drives the compliance filtering */}
+        <div className="rounded-lg border border-primary/20 bg-primary/[0.03] p-3 space-y-1">
+          <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-primary/80">
+            <Tag className="w-3.5 h-3.5" /> Business Category / Sector
+          </div>
+          <input
+            placeholder="e.g. Food Packaging, Industrial Gas, IT Services…"
+            value={formData.category}
+            list="category-suggestions"
+            onChange={e => set('category')(e.target.value)}
+            className="flex h-9 w-full rounded-md border bg-background px-2.5 py-1.5 text-sm transition-shadow
+              focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary"
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Focuses adverse-media, web &amp; reviews filtering onto this vendor's real risk profile.
+            Leave blank to screen against all results.
+          </p>
         </div>
 
-        <FormSection label="India Identifiers">
+        <Section icon={<IdCard className="w-3.5 h-3.5" />} label="India Identifiers">
           <Field label="GSTIN" value={formData.tax_identifier} onChange={set('tax_identifier')} />
           <Field label="PAN Number" value={formData.pan_number} onChange={set('pan_number')} />
           <Field label="MSMED Cert. No." value={formData.msmed_certificate_number} onChange={set('msmed_certificate_number')} />
-        </FormSection>
+        </Section>
 
-        <FormSection label="People">
+        <Section icon={<Users className="w-3.5 h-3.5" />} label="People">
           <Field label="Director Names (;-sep)" value={formData.director_names} onChange={set('director_names')} placeholder="Alice; Bob" />
           <Field label="Director DIN (;-sep)" value={formData.director_din} onChange={set('director_din')} placeholder="00000001; 00000002" />
           <Field label="Founder / CEO" value={formData.founder_ceo_name} onChange={set('founder_ceo_name')} />
-        </FormSection>
+        </Section>
 
-        <FormSection label="Contact &amp; Social">
+        <Section icon={<AtSign className="w-3.5 h-3.5" />} label="Contact &amp; Social">
           <Field label="Corporate Email Domain" value={formData.corporate_email_domain} onChange={set('corporate_email_domain')} placeholder="corp.com" />
           <Field label="Mobile Number" value={formData.mobile_number} onChange={set('mobile_number')} />
           <Field label="LinkedIn Handle" value={formData.linkedin_handle} onChange={set('linkedin_handle')} />
           <Field label="Twitter Handle" value={formData.twitter_handle} onChange={set('twitter_handle')} />
           <Field label="Facebook Handle" value={formData.facebook_handle} onChange={set('facebook_handle')} />
-        </FormSection>
+        </Section>
 
-        {/* Error */}
         {errorMsg && (
           <div className="bg-red-50 text-red-700 px-3 py-2 rounded-md border border-red-200 text-xs font-medium">
             {errorMsg}
           </div>
         )}
 
-        {/* Actions */}
-        <div className="flex gap-3 pt-1">
+        {/* Actions — sticky so Submit is always reachable on long forms */}
+        <div className="flex gap-3 pt-1 sticky bottom-0 -mx-5 -mb-5 px-5 py-3 bg-card/95 backdrop-blur border-t rounded-b-xl">
           <button
             type="button"
             onClick={handleClear}
