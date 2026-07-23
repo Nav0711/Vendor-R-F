@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from app.services.serper_budget import serper_budget
+from app.services.ecourts_budget import ecourts_budget
 
 logger = logging.getLogger(__name__)
 MOCK_MODE = os.getenv("MOCK_API_CALLS", "false").lower() == "true" or os.getenv("TEST_MODE", "false").lower() == "true"
@@ -517,6 +518,48 @@ class AuthBridgeAPI:
             logger.error(f"AuthBridge global sanctions error for '{name}': {e}")
             return {"error": str(e), "name": name, "matches": [], "is_sanctioned": False}
 
+class ECourtsIndiaAPI:
+    def __init__(self):
+        self.api_key = os.getenv("ECOURTS_API_KEY")
+        self.base_url = os.getenv("ECOURTS_BASE_URL", "https://api.ecourtsindia.com/v1").rstrip("/")
+
+    async def search_party(self, party_name: str) -> dict:
+        if not party_name:
+            return {"error": "No name provided"}
+        if MOCK_MODE:
+            return {"cases_found": 0, "cases": [], "risk": "low"}
+        
+        if not self.api_key:
+            return {"error": "Missing ECOURTS_API_KEY"}
+
+        # Use our budget tracker so a huge batch doesn't exhaust our API credits
+        if not ecourts_budget.try_spend(1):
+            logger.warning("eCourtsIndia daily budget exhausted — skipping court check for: %s", party_name)
+            return {"error": "ecourts_budget_exhausted", "cases_found": 0, "cases": [], "risk": "low"}
+
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT_LONG) as client:
+                response = await client.post(
+                    f"{self.base_url}/search/party", # Need to confirm exact endpoint with docs
+                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    json={"party_name": party_name}
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                # Extract cases based on the API's response schema (assumes a "cases" array)
+                cases = data.get("cases", [])
+                return {
+                    "name": party_name,
+                    "cases_found": len(cases),
+                    "cases": cases,
+                    "risk": "high" if len(cases) > 0 else "low",
+                    "raw_response": data
+                }
+        except Exception as e:
+            logger.error(f"eCourtsIndia API error for '{party_name}': {e}")
+            return {"error": str(e), "cases_found": 0, "cases": []}
+
 class SerperAPI:
     def __init__(self):
         self.api_key = os.getenv("SERPER_API_KEY")
@@ -703,6 +746,7 @@ ssl_api = SSLCheckAPI()
 authbridge_api = AuthBridgeAPI()
 sandbox_api = authbridge_api  # legacy alias — internal callers still use sandbox_api
 serper_api = SerperAPI()
+ecourts_api = ECourtsIndiaAPI()
 news_api = NewsAPIClient()
 google_places_api = GooglePlacesAPI()
 microlink_api = MicrolinkAPI()

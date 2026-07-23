@@ -1,7 +1,7 @@
 from app.api.endpoints import (
     opencorp, opensanctions, gdelt, whois_api, ssl_api,
     authbridge_api, sandbox_api,  # sandbox_api is an alias for authbridge_api
-    serper_api, news_api, google_places_api, microlink_api, wikipedia_api
+    serper_api, ecourts_api, news_api, google_places_api, microlink_api, wikipedia_api
 )
 from app.core.public_intel_map import build_serper_plan
 import asyncio
@@ -62,14 +62,14 @@ async def _gather_authbridge(
 
     # Court check: entity + each director + founder
     if legal_name:
-        tasks.append(authbridge_api.check_court(legal_name, entity_type="company"))
+        tasks.append(ecourts_api.search_party(legal_name))
         keys.append("court_entity")
     for i, d in enumerate((director_names or [])[:5]):
         if d:
-            tasks.append(authbridge_api.check_court(d, entity_type="individual"))
+            tasks.append(ecourts_api.search_party(d))
             keys.append(f"court_dir_{i}")
     if founder_ceo_name:
-        tasks.append(authbridge_api.check_court(founder_ceo_name, entity_type="individual"))
+        tasks.append(ecourts_api.search_party(founder_ceo_name))
         keys.append("court_founder")
 
     # Defaulting director: each director + founder
